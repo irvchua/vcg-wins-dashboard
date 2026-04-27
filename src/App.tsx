@@ -1,18 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
-
-type StatusLabel = "" | "ON PROCESS" | "FOR CHECKING" | "APPEALS" | "CLAIMS";
-type StageKey = "appeals" | "claims526" | "reviewSignature" | "faxing" | "faxed";
-
-type BoardEntry = {
-  id: number;
-  name: string;
-  assignedTo: string;
-  adminInCharge: string;
-  status: StatusLabel;
-};
-
-type BoardState = Record<StageKey, BoardEntry[]>;
+import { isFirebaseConfigured, saveBoardData, subscribeToBoard } from "./firebase";
+import type { BoardEntry, BoardState, StageKey, StatusLabel } from "./types";
 
 type StageConfigItem = {
   key: StageKey;
@@ -124,10 +113,13 @@ function getBadgeClass(status: StatusLabel): string {
 }
 
 function normalizeBoard(board: BoardState): BoardState {
-  const normalizeEntry = (entry: any): BoardEntry => ({
+  const normalizeEntry = (entry: Partial<BoardEntry>): BoardEntry => ({
     ...entry,
+    id: entry.id ?? 0,
+    name: entry.name ?? "",
     assignedTo: "",
     adminInCharge: entry.adminInCharge ?? entry.assignedTo ?? "",
+    status: entry.status ?? "",
   });
 
   return {
@@ -148,18 +140,72 @@ function loadInitialBoard(): BoardState {
   }
 }
 
+function loadInitialWins(): number {
+  const savedWins = localStorage.getItem(WINS_STORAGE_KEY);
+  return savedWins ? Number(savedWins) : 104;
+}
+
 export default function App() {
   const [now, setNow] = useState(new Date());
   const [board, setBoard] = useState<BoardState>(loadInitialBoard);
-  const [wins, setWins] = useState<number>(() => {
-    const savedWins = localStorage.getItem(WINS_STORAGE_KEY);
-    return savedWins ? Number(savedWins) : 104;
-  });
+  const [wins, setWins] = useState<number>(loadInitialWins);
   const [page, setPage] = useState<"tv" | "admin">("tv");
+  const [syncStatus, setSyncStatus] = useState(
+    isFirebaseConfigured ? "Connecting to Firebase..." : "Local backup only"
+  );
+  const hasRemoteLoaded = useRef(!isFirebaseConfigured);
+  const lastRemotePayload = useRef("");
+  const pendingLocalPayload = useRef("");
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured) return;
+
+    const unsubscribe = subscribeToBoard(
+      (remoteData) => {
+        hasRemoteLoaded.current = true;
+
+        if (!remoteData) {
+          const localBoard = loadInitialBoard();
+          const localWins = loadInitialWins();
+          const localPayload = JSON.stringify({ board: localBoard, wins: localWins });
+
+          lastRemotePayload.current = localPayload;
+          saveBoardData(localBoard, localWins)
+            .then(() => setSyncStatus("Synced with Firebase"))
+            .catch(() => setSyncStatus("Firebase unavailable. Saving locally."));
+          return;
+        }
+
+        const nextBoard = normalizeBoard(remoteData.board);
+        const nextWins = Number.isFinite(remoteData.wins) ? remoteData.wins : 104;
+        const remotePayload = JSON.stringify({ board: nextBoard, wins: nextWins });
+
+        if (pendingLocalPayload.current && remotePayload !== pendingLocalPayload.current) {
+          return;
+        }
+
+        if (remotePayload === pendingLocalPayload.current) {
+          pendingLocalPayload.current = "";
+        }
+
+        lastRemotePayload.current = remotePayload;
+        setBoard(nextBoard);
+        setWins(nextWins);
+        setSyncStatus("Synced with Firebase");
+      },
+      (error) => {
+        console.error("Firebase sync failed:", error);
+        hasRemoteLoaded.current = true;
+        setSyncStatus("Firebase unavailable. Saving locally.");
+      }
+    );
+
+    return () => unsubscribe?.();
   }, []);
 
   useEffect(() => {
@@ -169,6 +215,32 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(WINS_STORAGE_KEY, String(wins));
   }, [wins]);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured || !hasRemoteLoaded.current) return;
+
+    const payload = JSON.stringify({ board, wins });
+    if (payload === lastRemotePayload.current) return;
+
+    pendingLocalPayload.current = payload;
+    setSyncStatus("Saving to Firebase...");
+    const saveTimer = window.setTimeout(() => {
+      saveBoardData(board, wins)
+        .then(() => {
+          if (pendingLocalPayload.current !== payload) return;
+
+          lastRemotePayload.current = payload;
+          pendingLocalPayload.current = "";
+          setSyncStatus("Synced with Firebase");
+        })
+        .catch((error) => {
+          console.error("Firebase save failed:", error);
+          setSyncStatus("Firebase unavailable. Saving locally.");
+        });
+    }, 350);
+
+    return () => window.clearTimeout(saveTimer);
+  }, [board, wins]);
 
   const totalEntries = useMemo(() => getTotalEntries(board), [board]);
   const weekdayShort = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(now);
@@ -241,8 +313,6 @@ export default function App() {
 
     setBoard(emptyBoard);
     setWins(0);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(emptyBoard));
-    localStorage.setItem(WINS_STORAGE_KEY, "0");
   }
 
   return (
@@ -284,6 +354,7 @@ export default function App() {
             <div>
               <h1>Edit Wins Board</h1>
               <p>Drag rows between columns, update statuses, and assign who is in charge.</p>
+              <div className="sync-status">{syncStatus}</div>
             </div>
 
             <div className="admin-actions">

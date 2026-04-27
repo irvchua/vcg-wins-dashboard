@@ -1,73 +1,51 @@
-# React + TypeScript + Vite
+# VCG Wins Board
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite board for tracking wins across workflow stages.
 
-Currently, two official plugins are available:
+## Deploy to Vercel from GitHub
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+1. Push this project to a GitHub repository.
+2. In Vercel, choose **Add New > Project**.
+3. Import the GitHub repository.
+4. Keep the default Vite settings:
+   - Build command: `npm run build`
+   - Output directory: `dist`
+5. Add the environment variables from `.env.example` in **Project Settings > Environment Variables**.
+6. Deploy.
 
-## React Compiler
+Do not commit your real `.env` file. Vercel needs the same `VITE_FIREBASE_*` values configured in its dashboard so the deployed app can connect to Firestore.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Firebase persistence
 
-## Expanding the ESLint configuration
+The board persists to Firestore when Firebase environment variables are configured. It still writes a local backup to `localStorage`, so the app can run before Firebase is connected or during a temporary Firebase outage.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+1. Create a Firebase project.
+2. Create a Web app in Firebase project settings.
+3. Enable Firestore Database.
+4. Copy `.env.example` to `.env`.
+5. Fill in the `VITE_FIREBASE_*` values from the Firebase Web app config.
+6. Run the app with `npm run dev`.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+The app stores one document at:
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```txt
+winsBoards/main-board
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+You can change `main-board` by setting `VITE_FIREBASE_BOARD_ID`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+For simple internal use, start Firestore rules with your preferred access model. During development only, an open rule looks like:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```txt
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /winsBoards/{boardId} {
+      allow read, write: if true;
+    }
+  }
+}
 ```
+
+Before deploying publicly, replace that with authenticated or domain-restricted access.

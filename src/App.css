@@ -259,6 +259,20 @@ body,
   color: rgba(255,255,255,.65);
 }
 
+.sync-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin-top: 12px;
+  padding: 5px 9px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 999px;
+  background: rgba(255,255,255,.08);
+  color: rgba(255,255,255,.72);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .admin-actions {
   display: flex;
   align-items: flex-end;
