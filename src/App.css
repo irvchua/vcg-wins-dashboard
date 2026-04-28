@@ -17,7 +17,7 @@ body,
   background:
     radial-gradient(circle at top, rgba(21, 52, 92, 0.75), transparent 34%),
     linear-gradient(135deg, #050814 0%, #160305 55%, #050814 100%);
-  padding: 18px;
+  padding: clamp(10px, 1.35vw, 18px);
   overflow-x: auto;
 }
 
@@ -57,10 +57,10 @@ body,
 .tv-layout {
   min-height: calc(100vh - 36px);
   display: grid;
-  grid-template-columns: 230px minmax(920px, 1fr);
-  gap: 20px;
+  grid-template-columns: clamp(150px, 13vw, 230px) minmax(0, 1fr);
+  gap: clamp(12px, 1.25vw, 20px);
   align-items: center;
-  padding-top: 44px;
+  padding-top: clamp(26px, 3.2vh, 44px);
 }
 
 .left-panel {
@@ -70,9 +70,9 @@ body,
 }
 
 .logo {
-  width: 200px;
+  width: clamp(120px, 10.5vw, 200px);
   max-width: 100%;
-  margin: 0 auto 34px;
+  margin: 0 auto clamp(16px, 2.7vh, 34px);
   display: block;
 }
 
@@ -81,27 +81,27 @@ body,
 }
 
 .date-small {
-  font-size: 20px;
+  font-size: clamp(14px, 1.25vw, 20px);
   font-weight: 800;
   color: rgba(255,255,255,.7);
 }
 
 .day-number {
-  font-size: 82px;
+  font-size: clamp(48px, 5vw, 82px);
   line-height: 1;
   font-weight: 900;
 }
 
 .clock-time {
-  margin-top: 16px;
-  font-size: 34px;
+  margin-top: clamp(8px, 1.6vh, 16px);
+  font-size: clamp(22px, 2vw, 34px);
   font-weight: 300;
 }
 
 .wins-title {
-  margin: 0 0 28px;
+  margin: 0 0 clamp(12px, 2.4vh, 28px);
   text-align: center;
-  font-size: clamp(34px, 4vw, 58px);
+  font-size: clamp(30px, 3.2vw, 64px);
   font-weight: 300;
   letter-spacing: 1px;
 }
@@ -113,8 +113,8 @@ body,
 
 .modern-board {
   display: grid;
-  grid-template-columns: repeat(5, minmax(175px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: clamp(6px, .75vw, 10px);
 }
 
 .stage-card {
@@ -132,8 +132,8 @@ body,
 }
 
 .stage-header {
-  min-height: 76px;
-  padding: 12px;
+  min-height: clamp(58px, 7vh, 82px);
+  padding: clamp(8px, .9vw, 12px);
   display: flex;
   justify-content: space-between;
   gap: 8px;
@@ -146,43 +146,43 @@ body,
 
 .stage-header h2 {
   margin: 0;
-  font-size: 13px;
+  font-size: clamp(10px, .9vw, 18px);
   line-height: 1.15;
 }
 
 .stage-header p {
   margin: 5px 0 0;
-  font-size: 10px;
+  font-size: clamp(8px, .72vw, 13px);
   opacity: .65;
   font-style: italic;
 }
 
 .stage-count {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
+  width: clamp(22px, 1.9vw, 32px);
+  height: clamp(22px, 1.9vw, 32px);
+  flex: 0 0 clamp(22px, 1.9vw, 32px);
   display: grid;
   place-items: center;
   border-radius: 999px;
   background: rgba(255,255,255,.16);
-  font-size: 11px;
+  font-size: clamp(9px, .8vw, 14px);
   font-weight: 900;
 }
 
 .stage-list {
   display: grid;
-  gap: 6px;
-  padding: 8px;
+  gap: clamp(4px, .55vh, 6px);
+  padding: clamp(6px, .65vw, 8px);
 }
 
 .stage-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
+  gap: clamp(4px, .5vw, 6px);
   align-items: center;
-  min-height: 42px;
-  padding: 8px;
-  border-radius: 12px;
+  min-height: clamp(32px, 4.35vh, 52px);
+  padding: clamp(5px, .65vw, 8px);
+  border-radius: 10px;
   background: white;
   color: #111;
 }
@@ -194,21 +194,21 @@ body,
 .person-name {
   min-width: 0;
   white-space: normal;
-  font-size: 12px;
+  font-size: clamp(10px, .95vw, 18px);
   font-weight: 900;
   line-height: 1.1;
 }
 
 .badge {
-  min-width: 62px;
-  max-width: 78px;
-  min-height: 21px;
-  padding: 4px 6px;
+  min-width: clamp(48px, 5.2vw, 90px);
+  max-width: clamp(58px, 6.2vw, 108px);
+  min-height: clamp(17px, 2.2vh, 21px);
+  padding: 3px clamp(4px, .45vw, 6px);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  font-size: 9px;
+  font-size: clamp(7px, .72vw, 12px);
   font-weight: 900;
   text-align: center;
   line-height: 1;
@@ -333,7 +333,7 @@ body,
 }
 
 .person-owner {
-  font-size: 10px;
+  font-size: clamp(8px, .78vw, 13px);
   font-weight: 800;
   color: rgba(0, 0, 0, 0.55);
   line-height: 1.1;
@@ -534,6 +534,7 @@ body,
 
 .controls-row {
   grid-area: controls;
+  display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
@@ -568,6 +569,16 @@ body,
 /* RESPONSIVE */
 
 @media (max-width: 1300px) {
+  .admin-page {
+    min-width: 0;
+  }
+
+  .drag-admin-board {
+    grid-template-columns: repeat(2, minmax(280px, 1fr));
+  }
+}
+
+@media (max-width: 980px), (orientation: portrait) {
   .tv-layout {
     grid-template-columns: 1fr;
   }
@@ -578,14 +589,6 @@ body,
 
   .modern-board {
     grid-template-columns: repeat(2, minmax(230px, 1fr));
-  }
-
-  .admin-page {
-    min-width: 0;
-  }
-
-  .drag-admin-board {
-    grid-template-columns: repeat(2, minmax(280px, 1fr));
   }
 }
 
