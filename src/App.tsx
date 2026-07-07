@@ -330,7 +330,7 @@ export default function App() {
   }
 
   return (
-    <div className="app-shell">
+    <main className="app-shell">
       <div className="top-actions">
         <button className={page === "tv" ? "nav-button active" : "nav-button"} onClick={() => setPage("tv")}>
           TV Board
@@ -354,13 +354,13 @@ export default function App() {
             </div>
           </aside>
 
-          <main className="board-panel">
+          <div className="board-panel">
             <h1 className="wins-title">
               TOTAL WINS: <span>{wins}</span>
             </h1>
             <BoardTable board={board} />
             <div className="entries-line">Entries: {totalEntries}</div>
-          </main>
+          </div>
         </div>
       ) : (
         <div className="admin-page">
@@ -480,7 +480,7 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
+    </main>
   );
 }
 
