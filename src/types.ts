@@ -8,6 +8,7 @@ export type BoardEntry = {
   assignedTo: string;
   adminInCharge: string;
   status: StatusLabel;
+  notes?: string;
 };
 
 export type BoardState = Record<StageKey, BoardEntry[]>;

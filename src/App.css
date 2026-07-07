@@ -339,13 +339,33 @@ body,
   line-height: 1.1;
 }
 
+.person-notes {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #d93636;
+  font-size: clamp(8px, .72vw, 12px);
+  font-weight: 800;
+  line-height: 1.2;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.person-notes span {
+  margin-right: 4px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(217, 54, 54, 0.12);
+  font-size: .86em;
+  font-weight: 900;
+}
+
 .entry-field {
   display: grid;
   gap: 4px;
   width: 100%;
 }
 
-.entry-field:not(.owner-field) {
+.entry-field:not(.owner-field):not(.notes-field) {
   grid-area: name;
 }
 
@@ -359,6 +379,17 @@ body,
 
 .owner-field {
   grid-area: owner;
+}
+
+.notes-field {
+  grid-area: notes;
+}
+
+.note-counter {
+  justify-self: end;
+  color: rgba(0, 0, 0, 0.46);
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .owner-input {
@@ -380,6 +411,7 @@ body,
   grid-template-areas:
     "handle name"
     "handle owner"
+    "handle notes"
     "handle controls";
   gap: 8px 10px;
 }
@@ -466,6 +498,7 @@ body,
   grid-template-areas:
     "handle name"
     "handle owner"
+    "handle notes"
     "handle controls";
   gap: 8px 10px;
   align-items: start;
@@ -502,7 +535,25 @@ body,
   font-weight: 900;
 }
 
-.drag-row input:focus {
+.drag-row textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 70px;
+  resize: none;
+  border: none;
+  outline: none;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #f2f2f2;
+  color: #111;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.drag-row input:focus,
+.drag-row textarea:focus {
   background: #fff;
   box-shadow: 0 0 0 2px rgba(248,210,106,.45);
 }
@@ -624,9 +675,5 @@ body,
   .delete-button {
     justify-self: stretch;
     width: 100%;
-  }
-
-  .delete-button {
-    margin-top: 42px;
   }
 }

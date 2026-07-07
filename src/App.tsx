@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
-import { isFirebaseConfigured, saveBoardData, subscribeToBoard } from "./firebase";
+import {
+  isFirebaseConfigured,
+  saveBoardData,
+  shouldSeedMissingFirebaseBoard,
+  subscribeToBoard,
+} from "./firebase";
 import type { BoardEntry, BoardState, StageKey, StatusLabel } from "./types";
 
 type StageConfigItem = {
@@ -11,6 +16,7 @@ type StageConfigItem = {
 
 const STORAGE_KEY = "vcg-wins-board-data";
 const WINS_STORAGE_KEY = "vcg-total-wins";
+const NOTE_MAX_LENGTH = 80;
 
 const emptyBoard: BoardState = {
   appeals: [],
@@ -120,6 +126,7 @@ function normalizeBoard(board: BoardState): BoardState {
     assignedTo: "",
     adminInCharge: entry.adminInCharge ?? entry.assignedTo ?? "",
     status: entry.status ?? "",
+    notes: (entry.notes ?? "").slice(0, NOTE_MAX_LENGTH),
   });
 
   return {
@@ -173,6 +180,12 @@ export default function App() {
           const localBoard = loadInitialBoard();
           const localWins = loadInitialWins();
           const localPayload = JSON.stringify({ board: localBoard, wins: localWins });
+
+          if (!shouldSeedMissingFirebaseBoard) {
+            lastRemotePayload.current = localPayload;
+            setSyncStatus("Firebase board not found. Saving locally.");
+            return;
+          }
 
           lastRemotePayload.current = localPayload;
           saveBoardData(localBoard, localWins)
@@ -261,6 +274,7 @@ export default function App() {
           assignedTo: "",
           adminInCharge: "",
           status: "",
+          notes: "",
         },
       ],
     }));
@@ -429,6 +443,19 @@ export default function App() {
                         />
                       </label>
 
+                      <label className="entry-field notes-field">
+                        <span className="entry-field-label">Notes</span>
+                        <textarea
+                          maxLength={NOTE_MAX_LENGTH}
+                          value={entry.notes ?? ""}
+                          placeholder="Add notes for this record"
+                          onChange={(event) => updateEntry(stage.key, entry.id, "notes", event.target.value)}
+                        />
+                        <span className="note-counter">
+                          {(entry.notes ?? "").length}/{NOTE_MAX_LENGTH}
+                        </span>
+                      </label>
+
                       <div className="controls-row">
                         <select
                           value={entry.status}
@@ -485,6 +512,12 @@ function BoardTable({ board }: { board: BoardState }) {
                       <span className="person-name">{entry?.name ?? ""}</span>
                       {entry?.adminInCharge ? (
                         <span className="person-owner">Admin: {entry.adminInCharge}</span>
+                      ) : null}
+                      {entry?.notes ? (
+                        <span className="person-notes">
+                          <span>NOTE</span>
+                          {entry.notes}
+                        </span>
                       ) : null}
                     </div>
                     <span className={getBadgeClass(status)}>{status || " "}</span>

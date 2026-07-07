@@ -16,16 +16,19 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID,
 };
 
-export const isFirebaseConfigured = Object.values(firebaseConfig).every(Boolean);
+export const firebaseBoardId = import.meta.env.VITE_FIREBASE_BOARD_ID;
+export const shouldSeedMissingFirebaseBoard =
+  import.meta.env.VITE_FIREBASE_ALLOW_INITIAL_SEED === "true";
+
+export const isFirebaseConfigured = Object.values(firebaseConfig).every(Boolean) && Boolean(firebaseBoardId);
 
 function getBoardDocRef() {
   if (!isFirebaseConfigured) return null;
 
   const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
   const database = getFirestore(app);
-  const boardId = import.meta.env.VITE_FIREBASE_BOARD_ID || "main-board";
 
-  return doc(database, "winsBoards", boardId);
+  return doc(database, "winsBoards", firebaseBoardId);
 }
 
 export function subscribeToBoard(
