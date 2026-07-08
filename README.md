@@ -22,6 +22,20 @@ Set `VITE_FIREBASE_BOARD_ID` separately for each Vercel environment:
 
 This keeps test deployments and local changes from writing to the production records. The app will not connect to Firebase unless `VITE_FIREBASE_BOARD_ID` is set explicitly.
 
+To protect editing, enable Google sign-in in Firebase Authentication and set `VITE_AUTHORIZED_DOMAINS` in Vercel to the comma-separated list of email domains allowed to edit the board:
+
+```txt
+VITE_AUTHORIZED_DOMAINS=veteranschoiceglobal.com
+```
+
+You can also allow specific extra email addresses:
+
+```txt
+VITE_AUTHORIZED_EMAILS=contractor@gmail.com,partner@example.org
+```
+
+The TV board remains viewable. The Edit Board view requires Google sign-in when Firebase is configured. If both `VITE_AUTHORIZED_DOMAINS` and `VITE_AUTHORIZED_EMAILS` are empty, any signed-in Google user can edit, so set at least one of these variables in production.
+
 ## Firebase persistence
 
 The board persists to Firestore when Firebase environment variables are configured. It still writes a local backup to `localStorage`, so the app can run before Firebase is connected or during a temporary Firebase outage.

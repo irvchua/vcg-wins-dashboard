@@ -279,6 +279,66 @@ body,
   gap: 12px;
 }
 
+.auth-page {
+  min-height: calc(100vh - 36px);
+  display: grid;
+  place-items: center;
+  padding: 72px 16px 32px;
+}
+
+.auth-panel {
+  width: min(440px, 100%);
+  padding: 30px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 22px;
+  background: rgba(5, 5, 10, .72);
+  box-shadow: 0 20px 45px rgba(0,0,0,.28);
+  text-align: center;
+}
+
+.auth-logo {
+  width: 120px;
+  max-width: 46%;
+  margin: 0 auto 18px;
+  display: block;
+}
+
+.auth-panel h1 {
+  margin: 0;
+  font-size: 34px;
+}
+
+.auth-panel p {
+  margin: 12px 0 22px;
+  color: rgba(255,255,255,.68);
+  line-height: 1.45;
+}
+
+.auth-button {
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  padding: 13px 16px;
+  background: white;
+  color: #111;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.auth-button.secondary {
+  background: rgba(255,255,255,.1);
+  color: white;
+  border: 1px solid rgba(255,255,255,.16);
+}
+
+.auth-error {
+  margin-top: 14px;
+  color: #ff9a9a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .wins-editor {
   display: grid;
   gap: 7px;

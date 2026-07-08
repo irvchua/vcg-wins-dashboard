@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import {
+  canUserEdit,
+  type AuthUser,
   isFirebaseConfigured,
   saveBoardData,
   shouldSeedMissingFirebaseBoard,
+  signInWithGoogle,
+  signOutUser,
+  subscribeToAuth,
   subscribeToBoard,
 } from "./firebase";
 import type { BoardEntry, BoardState, StageKey, StatusLabel } from "./types";
@@ -157,6 +162,9 @@ export default function App() {
   const [board, setBoard] = useState<BoardState>(loadInitialBoard);
   const [wins, setWins] = useState<number>(loadInitialWins);
   const [page, setPage] = useState<"tv" | "admin">("tv");
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(isFirebaseConfigured);
+  const [authError, setAuthError] = useState("");
   const [syncStatus, setSyncStatus] = useState(
     isFirebaseConfigured ? "Connecting to Firebase..." : "Local backup only"
   );
@@ -167,6 +175,19 @@ export default function App() {
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!isFirebaseConfigured) {
+      return;
+    }
+
+    const unsubscribe = subscribeToAuth((user) => {
+      setAuthUser(user);
+      setIsAuthLoading(false);
+    });
+
+    return () => unsubscribe?.();
   }, []);
 
   useEffect(() => {
@@ -230,7 +251,7 @@ export default function App() {
   }, [wins]);
 
   useEffect(() => {
-    if (!isFirebaseConfigured || !hasRemoteLoaded.current) return;
+    if (!isFirebaseConfigured || !hasRemoteLoaded.current || !canUserEdit(authUser)) return;
 
     const payload = JSON.stringify({ board, wins });
     if (payload === lastRemotePayload.current) return;
@@ -253,9 +274,11 @@ export default function App() {
     }, 350);
 
     return () => window.clearTimeout(saveTimer);
-  }, [board, wins]);
+  }, [authUser, board, wins]);
 
   const totalEntries = useMemo(() => getTotalEntries(board), [board]);
+  const canEditBoard = canUserEdit(authUser);
+  const showAuthGate = isFirebaseConfigured && (!authUser || !canEditBoard);
   const weekdayShort = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(now);
   const monthShort = new Intl.DateTimeFormat("en-US", { month: "short" }).format(now);
   const dayNumber = now.getDate();
@@ -329,6 +352,22 @@ export default function App() {
     setWins(0);
   }
 
+  function handleSignIn() {
+    setAuthError("");
+    signInWithGoogle().catch((error) => {
+      console.error("Google sign-in failed:", error);
+      setAuthError("Sign-in failed. Please try again.");
+    });
+  }
+
+  function handleSignOut() {
+    setAuthError("");
+    signOutUser().catch((error) => {
+      console.error("Sign-out failed:", error);
+      setAuthError("Sign-out failed. Please try again.");
+    });
+  }
+
   return (
     <main className="app-shell">
       <div className="top-actions">
@@ -362,6 +401,31 @@ export default function App() {
             <div className="entries-line">Entries: {totalEntries}</div>
           </div>
         </div>
+      ) : showAuthGate ? (
+        <div className="auth-page">
+          <section className="auth-panel">
+            <img src="/vcg-logo.png" alt="Veterans Choice Global" className="auth-logo" />
+            <h1>Edit Board</h1>
+            {isAuthLoading ? (
+              <p>Checking access...</p>
+            ) : authUser ? (
+              <>
+                <p>This Google account does not have edit access. Please sign in with an approved work account.</p>
+                <button className="auth-button secondary" onClick={handleSignOut}>
+                  Sign out
+                </button>
+              </>
+            ) : (
+              <>
+                <p>Sign in with an approved Google account to update records.</p>
+                <button className="auth-button" onClick={handleSignIn}>
+                  Sign in with Google
+                </button>
+              </>
+            )}
+            {authError ? <div className="auth-error">{authError}</div> : null}
+          </section>
+        </div>
       ) : (
         <div className="admin-page">
           <div className="admin-header">
@@ -369,9 +433,16 @@ export default function App() {
               <h1>Edit Wins Board</h1>
               <p>Drag rows between columns, update statuses, and assign who is in charge.</p>
               <div className="sync-status">{syncStatus}</div>
+              {authUser ? <div className="sync-status">Signed in as {authUser.email}</div> : null}
             </div>
 
             <div className="admin-actions">
+              {authUser ? (
+                <button className="reset-keep-button" onClick={handleSignOut}>
+                  Sign Out
+                </button>
+              ) : null}
+
               <label className="wins-editor">
                 Total Wins
                 <input type="number" value={wins} onChange={(event) => setWins(Number(event.target.value))} />
