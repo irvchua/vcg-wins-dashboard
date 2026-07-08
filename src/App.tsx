@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import "./App.css";
 import {
   canUserEdit,
@@ -11,7 +11,7 @@ import {
   subscribeToAuth,
   subscribeToBoard,
 } from "./firebase";
-import type { BoardEntry, BoardState, StageKey, StatusLabel } from "./types";
+import type { ArchivedEntry, BoardEntry, BoardState, StageKey, StatusLabel } from "./types";
 
 type StageConfigItem = {
   key: StageKey;
@@ -19,7 +19,16 @@ type StageConfigItem = {
   metaTitle: string;
 };
 
+type AddRecordDraft = {
+  adminInCharge: string;
+  name: string;
+  notes: string;
+  stage: StageKey;
+  status: StatusLabel;
+};
+
 const STORAGE_KEY = "vcg-wins-board-data";
+const ARCHIVED_STORAGE_KEY = "vcg-wins-board-archive";
 const WINS_STORAGE_KEY = "vcg-total-wins";
 const NOTE_MAX_LENGTH = 80;
 
@@ -40,6 +49,14 @@ const stageConfig: StageConfigItem[] = [
 ];
 
 const statusOptions: StatusLabel[] = ["", "ON PROCESS", "FOR CHECKING", "APPEALS", "CLAIMS"];
+
+const defaultAddRecordDraft: AddRecordDraft = {
+  adminInCharge: "",
+  name: "",
+  notes: "",
+  stage: "appeals",
+  status: "",
+};
 
 const initialBoard: BoardState = {
   appeals: [
@@ -108,6 +125,16 @@ function getNextId(board: BoardState): number {
   return ids.length ? Math.max(...ids) + 1 : 1;
 }
 
+function archiveEntriesFromStage(entries: BoardEntry[], stage: StageKey): ArchivedEntry[] {
+  const archivedAt = new Date().toISOString();
+
+  return entries.map((entry) => ({
+    ...entry,
+    archivedAt,
+    archivedFrom: stage,
+  }));
+}
+
 function getBadgeClass(status: StatusLabel): string {
   switch (status) {
     case "ON PROCESS":
@@ -143,12 +170,35 @@ function normalizeBoard(board: BoardState): BoardState {
   };
 }
 
+function normalizeArchivedEntries(entries: Partial<ArchivedEntry>[] = []): ArchivedEntry[] {
+  return entries.map((entry) => ({
+    ...entry,
+    archivedAt: entry.archivedAt ?? new Date().toISOString(),
+    archivedFrom: entry.archivedFrom ?? "appeals",
+    id: entry.id ?? 0,
+    name: entry.name ?? "",
+    assignedTo: "",
+    adminInCharge: entry.adminInCharge ?? entry.assignedTo ?? "",
+    status: entry.status ?? "",
+    notes: (entry.notes ?? "").slice(0, NOTE_MAX_LENGTH),
+  }));
+}
+
 function loadInitialBoard(): BoardState {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? normalizeBoard(JSON.parse(saved)) : initialBoard;
   } catch {
     return initialBoard;
+  }
+}
+
+function loadInitialArchivedEntries(): ArchivedEntry[] {
+  try {
+    const saved = localStorage.getItem(ARCHIVED_STORAGE_KEY);
+    return saved ? normalizeArchivedEntries(JSON.parse(saved)) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -159,7 +209,12 @@ function loadInitialWins(): number {
 
 export default function App() {
   const [now, setNow] = useState(new Date());
+  const [addRecordDraft, setAddRecordDraft] = useState<AddRecordDraft>(defaultAddRecordDraft);
+  const [archivedEntries, setArchivedEntries] = useState<ArchivedEntry[]>(loadInitialArchivedEntries);
   const [board, setBoard] = useState<BoardState>(loadInitialBoard);
+  const [isAddRecordOpen, setIsAddRecordOpen] = useState(false);
+  const [isArchiveOpen, setIsArchiveOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [wins, setWins] = useState<number>(loadInitialWins);
   const [page, setPage] = useState<"tv" | "admin">("tv");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -198,9 +253,14 @@ export default function App() {
         hasRemoteLoaded.current = true;
 
         if (!remoteData) {
+          const localArchivedEntries = loadInitialArchivedEntries();
           const localBoard = loadInitialBoard();
           const localWins = loadInitialWins();
-          const localPayload = JSON.stringify({ board: localBoard, wins: localWins });
+          const localPayload = JSON.stringify({
+            archivedEntries: localArchivedEntries,
+            board: localBoard,
+            wins: localWins,
+          });
 
           if (!shouldSeedMissingFirebaseBoard) {
             lastRemotePayload.current = localPayload;
@@ -209,15 +269,20 @@ export default function App() {
           }
 
           lastRemotePayload.current = localPayload;
-          saveBoardData(localBoard, localWins)
+          saveBoardData(localBoard, localWins, localArchivedEntries)
             .then(() => setSyncStatus("Synced with Firebase"))
             .catch(() => setSyncStatus("Firebase unavailable. Saving locally."));
           return;
         }
 
+        const nextArchivedEntries = normalizeArchivedEntries(remoteData.archivedEntries);
         const nextBoard = normalizeBoard(remoteData.board);
         const nextWins = Number.isFinite(remoteData.wins) ? remoteData.wins : 104;
-        const remotePayload = JSON.stringify({ board: nextBoard, wins: nextWins });
+        const remotePayload = JSON.stringify({
+          archivedEntries: nextArchivedEntries,
+          board: nextBoard,
+          wins: nextWins,
+        });
 
         if (pendingLocalPayload.current && remotePayload !== pendingLocalPayload.current) {
           return;
@@ -228,6 +293,7 @@ export default function App() {
         }
 
         lastRemotePayload.current = remotePayload;
+        setArchivedEntries(nextArchivedEntries);
         setBoard(nextBoard);
         setWins(nextWins);
         setSyncStatus("Synced with Firebase");
@@ -247,19 +313,23 @@ export default function App() {
   }, [board]);
 
   useEffect(() => {
+    localStorage.setItem(ARCHIVED_STORAGE_KEY, JSON.stringify(archivedEntries));
+  }, [archivedEntries]);
+
+  useEffect(() => {
     localStorage.setItem(WINS_STORAGE_KEY, String(wins));
   }, [wins]);
 
   useEffect(() => {
     if (!isFirebaseConfigured || !hasRemoteLoaded.current || !canUserEdit(authUser)) return;
 
-    const payload = JSON.stringify({ board, wins });
+    const payload = JSON.stringify({ archivedEntries, board, wins });
     if (payload === lastRemotePayload.current) return;
 
     pendingLocalPayload.current = payload;
     setSyncStatus("Saving to Firebase...");
     const saveTimer = window.setTimeout(() => {
-      saveBoardData(board, wins)
+      saveBoardData(board, wins, archivedEntries)
         .then(() => {
           if (pendingLocalPayload.current !== payload) return;
 
@@ -274,33 +344,64 @@ export default function App() {
     }, 350);
 
     return () => window.clearTimeout(saveTimer);
-  }, [authUser, board, wins]);
+  }, [archivedEntries, authUser, board, wins]);
 
   const totalEntries = useMemo(() => getTotalEntries(board), [board]);
   const canEditBoard = canUserEdit(authUser);
   const showAuthGate = isFirebaseConfigured && (!authUser || !canEditBoard);
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const filteredBoard = useMemo(() => {
+    if (!normalizedSearchQuery) return board;
+
+    const matchesQuery = (entry: BoardEntry) =>
+      [entry.name, entry.adminInCharge, entry.status, entry.notes]
+        .filter(Boolean)
+        .some((value) => value?.toLowerCase().includes(normalizedSearchQuery));
+
+    return {
+      appeals: board.appeals.filter(matchesQuery),
+      claims526: board.claims526.filter(matchesQuery),
+      reviewSignature: board.reviewSignature.filter(matchesQuery),
+      faxing: board.faxing.filter(matchesQuery),
+      faxed: board.faxed.filter(matchesQuery),
+    };
+  }, [board, normalizedSearchQuery]);
+  const filteredEntriesCount = getTotalEntries(filteredBoard);
   const weekdayShort = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(now);
   const monthShort = new Intl.DateTimeFormat("en-US", { month: "short" }).format(now);
   const dayNumber = now.getDate();
 
-  function addRow(stage: StageKey) {
-    const name = window.prompt("Enter veteran name:");
-    if (!name?.trim()) return;
+  function openAddRecord(stage: StageKey) {
+    setAddRecordDraft({ ...defaultAddRecordDraft, stage });
+    setIsAddRecordOpen(true);
+  }
+
+  function closeAddRecord() {
+    setIsAddRecordOpen(false);
+    setAddRecordDraft(defaultAddRecordDraft);
+  }
+
+  function submitAddRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const name = addRecordDraft.name.trim();
+    if (!name) return;
 
     setBoard((current) => ({
       ...current,
-      [stage]: [
-        ...current[stage],
+      [addRecordDraft.stage]: [
+        ...current[addRecordDraft.stage],
         {
           id: getNextId(current),
-          name: name.trim(),
+          name,
           assignedTo: "",
-          adminInCharge: "",
-          status: "",
-          notes: "",
+          adminInCharge: addRecordDraft.adminInCharge.trim(),
+          status: addRecordDraft.status,
+          notes: addRecordDraft.notes.trim(),
         },
       ],
     }));
+
+    closeAddRecord();
   }
 
   function updateEntry(stage: StageKey, id: number, field: keyof BoardEntry, value: string) {
@@ -312,11 +413,47 @@ export default function App() {
     }));
   }
 
-  function deleteEntry(stage: StageKey, id: number) {
+  function archiveEntry(stage: StageKey, id: number) {
     setBoard((current) => ({
       ...current,
       [stage]: current[stage].filter((entry) => entry.id !== id),
     }));
+
+    const entry = board[stage].find((entry) => entry.id === id);
+    if (!entry) return;
+
+    setArchivedEntries((current) => [
+      {
+        ...entry,
+        archivedAt: new Date().toISOString(),
+        archivedFrom: stage,
+      },
+      ...current,
+    ]);
+  }
+
+  function restoreArchivedEntry(id: number, archivedAt: string) {
+    const entry = archivedEntries.find((entry) => entry.id === id && entry.archivedAt === archivedAt);
+    if (!entry) return;
+
+    setBoard((current) => ({
+      ...current,
+      [entry.archivedFrom]: [
+        ...current[entry.archivedFrom],
+        {
+          id: getNextId(current),
+          name: entry.name,
+          assignedTo: "",
+          adminInCharge: entry.adminInCharge,
+          status: entry.status,
+          notes: entry.notes,
+        },
+      ],
+    }));
+
+    setArchivedEntries((current) =>
+      current.filter((entry) => entry.id !== id || entry.archivedAt !== archivedAt)
+    );
   }
 
   function moveEntry(fromStage: StageKey, toStage: StageKey, id: number) {
@@ -338,6 +475,7 @@ export default function App() {
     const confirmClear = window.confirm("Clear only the FAXED column and keep everything else?");
     if (!confirmClear) return;
 
+    setArchivedEntries((current) => [...archiveEntriesFromStage(board.faxed, "faxed"), ...current]);
     setBoard((current) => ({
       ...current,
       faxed: [],
@@ -348,6 +486,10 @@ export default function App() {
     const confirmReset = window.confirm("Clear all rows and reset Total Wins to 0?");
     if (!confirmReset) return;
 
+    setArchivedEntries((current) => [
+      ...stageConfig.flatMap((stage) => archiveEntriesFromStage(board[stage.key], stage.key)),
+      ...current,
+    ]);
     setBoard(emptyBoard);
     setWins(0);
   }
@@ -429,34 +571,173 @@ export default function App() {
       ) : (
         <div className="admin-page">
           <div className="admin-header">
-            <div>
+            <div className="admin-title-block">
               <h1>Edit Wins Board</h1>
               <p>Drag rows between columns, update statuses, and assign who is in charge.</p>
-              <div className="sync-status">{syncStatus}</div>
-              {authUser ? <div className="sync-status">Signed in as {authUser.email}</div> : null}
+              <div className="status-row">
+                <div className="sync-status">{syncStatus}</div>
+                {authUser ? <div className="sync-status">Signed in as {authUser.email}</div> : null}
+              </div>
             </div>
 
             <div className="admin-actions">
-              {authUser ? (
-                <button className="reset-keep-button" onClick={handleSignOut}>
-                  Sign Out
-                </button>
-              ) : null}
-
               <label className="wins-editor">
                 Total Wins
                 <input type="number" value={wins} onChange={(event) => setWins(Number(event.target.value))} />
               </label>
 
+              <button className="secondary-action-button" onClick={() => setIsArchiveOpen((current) => !current)}>
+                Archive ({archivedEntries.length})
+              </button>
+
+              {authUser ? (
+                <button className="secondary-action-button" onClick={handleSignOut}>
+                  Sign Out
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="admin-toolbar">
+            <label className="search-field">
+              <span>Search</span>
+              <input
+                value={searchQuery}
+                placeholder="Name, admin, status, or notes"
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
+            </label>
+
+            <div className="toolbar-summary">
+              {normalizedSearchQuery ? `${filteredEntriesCount} of ${totalEntries} records shown` : `${totalEntries} active records`}
+            </div>
+
+            <div className="danger-actions">
               <button className="reset-keep-button" onClick={clearFaxedBoard}>
                 Clear Faxed
               </button>
-
               <button className="reset-button" onClick={resetBoard}>
                 Reset All
               </button>
             </div>
           </div>
+
+          {isArchiveOpen ? (
+            <section className="archive-panel">
+              <div>
+                <h2>Archived Records</h2>
+                <p>Archived rows stay out of the live board but can be restored.</p>
+              </div>
+
+              {archivedEntries.length ? (
+                <div className="archive-list">
+                  {archivedEntries.map((entry) => (
+                    <div className="archive-row" key={`${entry.id}-${entry.archivedAt}`}>
+                      <div>
+                        <strong>{entry.name}</strong>
+                        <span>
+                          From {stageConfig.find((stage) => stage.key === entry.archivedFrom)?.title ?? entry.archivedFrom}
+                        </span>
+                      </div>
+                      <button onClick={() => restoreArchivedEntry(entry.id, entry.archivedAt)}>Restore</button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="empty-state">No archived records yet.</p>
+              )}
+            </section>
+          ) : null}
+
+          {isAddRecordOpen ? (
+            <div className="modal-backdrop" role="presentation" onMouseDown={closeAddRecord}>
+              <form className="record-modal" onSubmit={submitAddRecord} onMouseDown={(event) => event.stopPropagation()}>
+                <div className="record-modal-header">
+                  <h2>Add Record</h2>
+                  <button type="button" onClick={closeAddRecord} aria-label="Close add record form">
+                    x
+                  </button>
+                </div>
+
+                <label className="modal-field">
+                  Stage
+                  <select
+                    value={addRecordDraft.stage}
+                    onChange={(event) =>
+                      setAddRecordDraft((current) => ({ ...current, stage: event.target.value as StageKey }))
+                    }
+                  >
+                    {stageConfig.map((stage) => (
+                      <option key={stage.key} value={stage.key}>
+                        {stage.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="modal-field">
+                  Veteran
+                  <input
+                    autoFocus
+                    value={addRecordDraft.name}
+                    placeholder="Veteran's Name"
+                    onChange={(event) => setAddRecordDraft((current) => ({ ...current, name: event.target.value }))}
+                  />
+                </label>
+
+                <label className="modal-field">
+                  Admin
+                  <input
+                    value={addRecordDraft.adminInCharge}
+                    placeholder="Admin"
+                    onChange={(event) =>
+                      setAddRecordDraft((current) => ({ ...current, adminInCharge: event.target.value }))
+                    }
+                  />
+                </label>
+
+                <label className="modal-field">
+                  Status
+                  <select
+                    value={addRecordDraft.status}
+                    onChange={(event) =>
+                      setAddRecordDraft((current) => ({ ...current, status: event.target.value as StatusLabel }))
+                    }
+                  >
+                    {statusOptions.map((status) => (
+                      <option key={status || "blank"} value={status}>
+                        {status || "Blank"}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="modal-field">
+                  Notes
+                  <textarea
+                    maxLength={NOTE_MAX_LENGTH}
+                    value={addRecordDraft.notes}
+                    placeholder="Add notes for this record"
+                    onChange={(event) =>
+                      setAddRecordDraft((current) => ({ ...current, notes: event.target.value }))
+                    }
+                  />
+                  <span className="note-counter">
+                    {addRecordDraft.notes.length}/{NOTE_MAX_LENGTH}
+                  </span>
+                </label>
+
+                <div className="record-modal-actions">
+                  <button type="button" className="secondary-action-button" onClick={closeAddRecord}>
+                    Cancel
+                  </button>
+                  <button type="submit" className="primary-action-button" disabled={!addRecordDraft.name.trim()}>
+                    Add Record
+                  </button>
+                </div>
+              </form>
+            </div>
+          ) : null}
 
           <div className="drag-admin-board">
             {stageConfig.map((stage) => (
@@ -477,13 +758,17 @@ export default function App() {
                     <p>{stage.metaTitle}</p>
                   </div>
                   <div className="drag-column-actions">
-                    <span>{board[stage.key].length}</span>
-                    <button onClick={() => addRow(stage.key)}>+ Add</button>
+                    <span>
+                      {filteredBoard[stage.key].length}
+                      {normalizedSearchQuery ? `/${board[stage.key].length}` : ""}
+                    </span>
+                    <button onClick={() => openAddRecord(stage.key)}>+ Add</button>
                   </div>
                 </div>
 
                 <div className="drag-list">
-                  {board[stage.key].map((entry) => (
+                  {filteredBoard[stage.key].length ? (
+                    filteredBoard[stage.key].map((entry) => (
                     <div
                       className="drag-row"
                       key={entry.id}
@@ -539,12 +824,17 @@ export default function App() {
                           ))}
                         </select>
 
-                        <button className="delete-button" onClick={() => deleteEntry(stage.key, entry.id)}>
-                          Delete
+                        <button className="archive-button" onClick={() => archiveEntry(stage.key, entry.id)}>
+                          Archive
                         </button>
                       </div>
                     </div>
-                  ))}
+                    ))
+                  ) : (
+                    <div className="column-empty-state">
+                      {normalizedSearchQuery ? "No matching records" : "No records"}
+                    </div>
+                  )}
                 </div>
               </section>
             ))}

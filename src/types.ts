@@ -12,3 +12,8 @@ export type BoardEntry = {
 };
 
 export type BoardState = Record<StageKey, BoardEntry[]>;
+
+export type ArchivedEntry = BoardEntry & {
+  archivedAt: string;
+  archivedFrom: StageKey;
+};

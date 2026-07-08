@@ -8,9 +8,10 @@ import {
   type User,
 } from "firebase/auth";
 import { doc, getFirestore, onSnapshot, serverTimestamp, setDoc } from "firebase/firestore";
-import type { BoardState } from "./types";
+import type { ArchivedEntry, BoardState } from "./types";
 
 type PersistedBoardData = {
+  archivedEntries: ArchivedEntry[];
   board: BoardState;
   wins: number;
 };
@@ -129,6 +130,7 @@ export function subscribeToBoard(
 
       const data = snapshot.data();
       onData({
+        archivedEntries: Array.isArray(data.archivedEntries) ? (data.archivedEntries as ArchivedEntry[]) : [],
         board: data.board as BoardState,
         wins: typeof data.wins === "number" ? data.wins : 0,
       });
@@ -137,13 +139,14 @@ export function subscribeToBoard(
   );
 }
 
-export async function saveBoardData(board: BoardState, wins: number) {
+export async function saveBoardData(board: BoardState, wins: number, archivedEntries: ArchivedEntry[]) {
   const boardDocRef = getBoardDocRef();
   if (!boardDocRef) return false;
 
   await setDoc(
     boardDocRef,
     {
+      archivedEntries,
       board,
       wins,
       updatedAt: serverTimestamp(),
