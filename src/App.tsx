@@ -34,6 +34,12 @@ type AddRecordDraft = {
 
 type EditRecordDraft = BoardEntry & { stage: StageKey };
 
+type WinsAnimation = {
+  delta: number;
+  direction: "increase" | "decrease";
+  id: number;
+};
+
 const STORAGE_KEY = "vcg-wins-board-data";
 const ARCHIVED_STORAGE_KEY = "vcg-wins-board-archive";
 const WINS_STORAGE_KEY = "vcg-total-wins";
@@ -122,6 +128,15 @@ function formatTime(date: Date): string {
     minute: "2-digit",
     second: "2-digit",
   }).format(date);
+}
+
+function formatLastUpdated(timestamp: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestamp));
 }
 
 function getTotalEntries(board: BoardState): number {
@@ -254,10 +269,13 @@ export default function App() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [wins, setWins] = useState<number>(loadInitialWins);
+  const [winsInput, setWinsInput] = useState(() => String(loadInitialWins()));
+  const [winsAnimation, setWinsAnimation] = useState<WinsAnimation | null>(null);
   const [page, setPage] = useState<"tv" | "admin">("tv");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isFirebaseConfigured);
   const [isRemoteReady, setIsRemoteReady] = useState(!isFirebaseConfigured);
+  const [hasRemoteLegacyBoard, setHasRemoteLegacyBoard] = useState(false);
   const [authError, setAuthError] = useState("");
   const [syncStatus, setSyncStatus] = useState(
     isFirebaseConfigured ? "Connecting to Firebase..." : "Local backup only"
@@ -266,11 +284,33 @@ export default function App() {
   const lastRemotePayload = useRef("");
   const pendingLocalPayload = useRef("");
   const hasMigratedRecords = useRef(false);
+  const previousWins = useRef(wins);
+  const hasReceivedInitialWins = useRef(!isFirebaseConfigured);
+  const isWinsInputFocused = useRef(false);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const previous = previousWins.current;
+    if (previous === wins) return;
+
+    previousWins.current = wins;
+    const animation: WinsAnimation = {
+      delta: wins - previous,
+      direction: wins > previous ? "increase" : "decrease",
+      id: Date.now(),
+    };
+    setWinsAnimation(animation);
+    const timer = window.setTimeout(() => setWinsAnimation(null), 1400);
+    return () => window.clearTimeout(timer);
+  }, [wins]);
+
+  useEffect(() => {
+    if (!isWinsInputFocused.current) setWinsInput(String(wins));
+  }, [wins]);
 
   useEffect(() => {
     if (!isFirebaseConfigured) {
@@ -294,6 +334,7 @@ export default function App() {
         setIsRemoteReady(true);
 
         if (!remoteData) {
+          setHasRemoteLegacyBoard(false);
           const localActivities = loadInitialActivities();
           const localWins = loadInitialWins();
           const localPayload = JSON.stringify({
@@ -315,9 +356,14 @@ export default function App() {
         }
 
         const nextActivities = remoteData.activities ?? [];
+        setHasRemoteLegacyBoard(remoteData.hasLegacyBoard);
         const nextArchivedEntries = normalizeArchivedEntries(remoteData.archivedEntries);
         const nextBoard = normalizeBoard(remoteData.board);
         const nextWins = Number.isFinite(remoteData.wins) ? remoteData.wins : 104;
+        if (!hasReceivedInitialWins.current) {
+          previousWins.current = nextWins;
+          hasReceivedInitialWins.current = true;
+        }
         const remotePayload = JSON.stringify({
           activities: nextActivities,
           wins: nextWins,
@@ -354,7 +400,13 @@ export default function App() {
   }, [activities]);
 
   useEffect(() => {
-    if (!isFirebaseConfigured || !canUserEdit(authUser) || !isRemoteReady || hasMigratedRecords.current) {
+    if (
+      !isFirebaseConfigured
+      || !canUserEdit(authUser)
+      || !isRemoteReady
+      || (!hasRemoteLegacyBoard && !shouldSeedMissingFirebaseBoard)
+      || hasMigratedRecords.current
+    ) {
       return;
     }
     hasMigratedRecords.current = true;
@@ -363,7 +415,7 @@ export default function App() {
       hasMigratedRecords.current = false;
       setSyncStatus("Record migration failed. Please reload.");
     });
-  }, [archivedEntries, authUser, board, isRemoteReady]);
+  }, [archivedEntries, authUser, board, hasRemoteLegacyBoard, isRemoteReady]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
@@ -424,7 +476,6 @@ export default function App() {
       faxed: board.faxed.filter(matchesQuery),
     };
   }, [board, normalizedSearchQuery]);
-  const filteredEntriesCount = getTotalEntries(filteredBoard);
   const displayedBoard = useMemo(() => {
     if (sortBy === "manual") return filteredBoard;
 
@@ -705,20 +756,44 @@ export default function App() {
     });
   }
 
+  function commitWinsInput() {
+    const trimmedValue = winsInput.trim();
+    if (!trimmedValue) {
+      setWinsInput(String(wins));
+      return;
+    }
+
+    const nextWins = Number(trimmedValue);
+    if (!Number.isFinite(nextWins)) {
+      setWinsInput(String(wins));
+      return;
+    }
+
+    const normalizedWins = Math.max(0, Math.trunc(nextWins));
+    setWins(normalizedWins);
+    setWinsInput(String(normalizedWins));
+  }
+
   return (
     <main className="app-shell">
       <div className="top-actions">
-        <button className={page === "tv" ? "nav-button active" : "nav-button"} onClick={() => setPage("tv")}>
-          TV Board
-        </button>
-        <button className={page === "admin" ? "nav-button active" : "nav-button"} onClick={() => setPage("admin")}>
-          Edit Board
-        </button>
-        {page === "admin" && authUser ? (
-          <button className="nav-button sign-out-button" onClick={handleSignOut}>
-            Sign Out
+        <div className="top-action-buttons">
+          <button className={page === "tv" ? "nav-button active" : "nav-button"} onClick={() => setPage("tv")}>
+            TV Board
           </button>
-        ) : null}
+          <button className={page === "admin" ? "nav-button active" : "nav-button"} onClick={() => setPage("admin")}>
+            Edit Board
+          </button>
+          {page === "admin" && authUser ? (
+            <button className="nav-button sign-out-button" onClick={handleSignOut}>
+              Sign Out
+            </button>
+          ) : null}
+        </div>
+        <div className="top-entries-count">
+          <span>Active Entries</span>
+          <strong>{totalEntries}</strong>
+        </div>
       </div>
 
       {page === "tv" ? (
@@ -737,10 +812,21 @@ export default function App() {
 
           <div className="board-panel">
             <h1 className="wins-title">
-              TOTAL WINS: <span>{wins}</span>
+                TOTAL WINS:{" "}
+                <span
+                  className={`wins-celebration ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}
+                  key={winsAnimation?.id ?? "wins-idle"}
+                >
+                  <span className="wins-number">{wins}</span>
+                  {winsAnimation?.direction === "increase" ? (
+                    <span className="wins-delta">+{winsAnimation.delta} {winsAnimation.delta === 1 ? "WIN" : "WINS"}</span>
+                  ) : null}
+                  <span className="win-sparkle sparkle-one" aria-hidden="true">✦</span>
+                  <span className="win-sparkle sparkle-two" aria-hidden="true">✦</span>
+                  <span className="win-sparkle sparkle-three" aria-hidden="true">✦</span>
+                </span>
             </h1>
             <BoardTable board={board} />
-            <div className="entries-line">Entries: {totalEntries}</div>
           </div>
         </div>
       ) : showAuthGate ? (
@@ -775,10 +861,6 @@ export default function App() {
               <h1>Edit Wins Board</h1>
               <p>Drag rows between columns, update statuses, and assign who is in charge.</p>
               <div className="status-row">
-                <div className="records-count">
-                  <strong>{normalizedSearchQuery ? filteredEntriesCount : totalEntries}</strong>
-                  <span>{normalizedSearchQuery ? `of ${totalEntries} records shown` : "active records"}</span>
-                </div>
                 <div className="sync-status">{syncStatus}</div>
                 {lastUpdatedAt ? (
                   <div className="sync-status">Last updated {new Date(lastUpdatedAt).toLocaleString()}</div>
@@ -788,9 +870,30 @@ export default function App() {
             </div>
 
             <div className="admin-actions">
-              <label className="wins-editor">
+              <label className={`wins-editor ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}>
                 Total Wins
-                <input type="number" value={wins} onChange={(event) => setWins(Number(event.target.value))} />
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={winsInput}
+                  onFocus={(event) => {
+                    isWinsInputFocused.current = true;
+                    event.currentTarget.select();
+                  }}
+                  onChange={(event) => setWinsInput(event.target.value)}
+                  onBlur={() => {
+                    isWinsInputFocused.current = false;
+                    commitWinsInput();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                    if (event.key === "Escape") {
+                      setWinsInput(String(wins));
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
               </label>
 
               <button className="secondary-action-button" onClick={() => setIsArchiveOpen((current) => !current)}>
@@ -1233,6 +1336,11 @@ function BoardTable({ board }: { board: BoardState }) {
                         <span className="person-notes">
                           <span>NOTE</span>
                           {entry.notes}
+                        </span>
+                      ) : null}
+                      {entry?.updatedAt ? (
+                        <span className="person-updated" title={new Date(entry.updatedAt).toLocaleString()}>
+                          Updated {formatLastUpdated(entry.updatedAt)}
                         </span>
                       ) : null}
                     </div>

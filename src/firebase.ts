@@ -24,6 +24,7 @@ type PersistedBoardData = {
   archivedEntries: ArchivedEntry[];
   activities: ActivityEntry[];
   board: BoardState;
+  hasLegacyBoard: boolean;
   updatedAt: string | null;
   wins: number;
 };
@@ -63,6 +64,22 @@ export const shouldSeedMissingFirebaseBoard =
 export const authorizedDomains = ["jcmchcorp.com", "veteranschoiceglobal.com"];
 
 export const isFirebaseConfigured = Object.values(firebaseConfig).every(Boolean) && Boolean(firebaseBoardId);
+
+function cleanFirestoreData<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => cleanFirestoreData(item)) as T;
+  }
+
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .map(([key, item]) => [key, cleanFirestoreData(item)])
+    ) as T;
+  }
+
+  return value;
+}
 
 function getFirebaseApp() {
   if (!isFirebaseConfigured) return null;
@@ -157,6 +174,7 @@ export function subscribeToBoard(
         activities: Array.isArray(metadata.activities) ? (metadata.activities as ActivityEntry[]) : [],
         archivedEntries: Array.isArray(metadata.archivedEntries) ? (metadata.archivedEntries as ArchivedEntry[]) : [],
         board: metadata.board as BoardState,
+        hasLegacyBoard: true,
         updatedAt: (metadata.updatedAt as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? null,
         wins: typeof metadata.wins === "number" ? metadata.wins : 0,
       });
@@ -182,6 +200,7 @@ export function subscribeToBoard(
       activities: Array.isArray(metadata.activities) ? (metadata.activities as ActivityEntry[]) : [],
       archivedEntries: archivedEntries.sort((a, b) => b.archivedAt.localeCompare(a.archivedAt)),
       board,
+      hasLegacyBoard: false,
       updatedAt: (metadata.updatedAt as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? null,
       wins: typeof metadata.wins === "number" ? metadata.wins : 0,
     });
@@ -216,7 +235,7 @@ export async function saveBoardData(
   await setDoc(
     boardDocRef,
     {
-      activities,
+      activities: cleanFirestoreData(activities),
       schemaVersion: 2,
       wins,
       updatedAt: serverTimestamp(),
@@ -236,21 +255,21 @@ export async function migrateLegacyBoardRecords(board: BoardState, archivedEntri
 
   const batch = writeBatch(getFirestore(getFirebaseApp()!));
   Object.entries(board).forEach(([stage, entries]) => {
-    entries.forEach((entry) => batch.set(doc(recordsRef, String(entry.id)), {
+    entries.forEach((entry) => batch.set(doc(recordsRef, String(entry.id)), cleanFirestoreData({
       ...entry,
       isArchived: false,
       stage,
       updatedAt: entry.updatedAt ?? new Date().toISOString(),
       version: entry.version ?? 1,
-    }));
+    })));
   });
-  archivedEntries.forEach((entry) => batch.set(doc(recordsRef, String(entry.id)), {
+  archivedEntries.forEach((entry) => batch.set(doc(recordsRef, String(entry.id)), cleanFirestoreData({
     ...entry,
     isArchived: true,
     stage: entry.archivedFrom,
     updatedAt: entry.updatedAt ?? entry.archivedAt,
     version: entry.version ?? 1,
-  }));
+  })));
   batch.set(boardDocRef, { schemaVersion: 2, updatedAt: serverTimestamp() }, { merge: true });
   await batch.commit();
   return true;
@@ -259,14 +278,14 @@ export async function migrateLegacyBoardRecords(board: BoardState, archivedEntri
 export async function createBoardRecord(stage: StageKey, entry: BoardEntry, actor: string) {
   const recordRef = getRecordDocRef(entry.id);
   if (!recordRef) return;
-  await setDoc(recordRef, {
+  await setDoc(recordRef, cleanFirestoreData({
     ...entry,
     isArchived: false,
     stage,
     updatedAt: entry.updatedAt ?? new Date().toISOString(),
     updatedBy: actor,
     version: 1,
-  });
+  }));
 }
 
 export async function saveBoardRecord(
@@ -286,14 +305,14 @@ export async function saveBoardRecord(
     if (!snapshot.exists() || (snapshot.data().version ?? 1) !== expectedVersion) {
       throw new RecordConflictError();
     }
-    transaction.set(recordRef, {
+    transaction.set(recordRef, cleanFirestoreData({
       ...entry,
       isArchived: false,
       stage,
       updatedAt,
       updatedBy: actor,
       version: expectedVersion + 1,
-    });
+    }));
   });
   return { ...entry, updatedAt, updatedBy: actor, version: expectedVersion + 1 };
 }
@@ -307,11 +326,11 @@ export async function updateRecordState(entry: BoardEntry, data: Partial<StoredR
     if (!snapshot.exists() || (snapshot.data().version ?? 1) !== (entry.version ?? 1)) {
       throw new RecordConflictError();
     }
-    transaction.set(recordRef, {
+    transaction.set(recordRef, cleanFirestoreData({
       ...data,
       updatedAt: new Date().toISOString(),
       updatedBy: actor,
       version: (entry.version ?? 1) + 1,
-    }, { merge: true });
+    }), { merge: true });
   });
 }
