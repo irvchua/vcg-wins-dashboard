@@ -130,13 +130,14 @@ function formatTime(date: Date): string {
   }).format(date);
 }
 
-function formatLastUpdated(timestamp: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
+function formatRelativeUpdated(timestamp: string, now: Date): string {
+  const elapsedSeconds = Math.max(0, Math.floor((now.getTime() - new Date(timestamp).getTime()) / 1000));
+  if (elapsedSeconds < 60) return "just now";
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}h ago`;
+  return `${Math.floor(elapsedHours / 24)}d ago`;
 }
 
 function getTotalEntries(board: BoardState): number {
@@ -275,6 +276,8 @@ export default function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isFirebaseConfigured);
   const [isRemoteReady, setIsRemoteReady] = useState(!isFirebaseConfigured);
+  const [areTvControlsVisible, setAreTvControlsVisible] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [hasRemoteLegacyBoard, setHasRemoteLegacyBoard] = useState(false);
   const [authError, setAuthError] = useState("");
   const [syncStatus, setSyncStatus] = useState(
@@ -291,6 +294,33 @@ export default function App() {
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (page !== "tv") return;
+
+    let hideTimer = window.setTimeout(() => setAreTvControlsVisible(false), 5000);
+    const revealControls = () => {
+      setAreTvControlsVisible(true);
+      window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => setAreTvControlsVisible(false), 5000);
+    };
+
+    window.addEventListener("mousemove", revealControls);
+    window.addEventListener("keydown", revealControls);
+    window.addEventListener("touchstart", revealControls);
+    return () => {
+      window.clearTimeout(hideTimer);
+      window.removeEventListener("mousemove", revealControls);
+      window.removeEventListener("keydown", revealControls);
+      window.removeEventListener("touchstart", revealControls);
+    };
+  }, [page]);
+
+  useEffect(() => {
+    const updateFullscreenState = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", updateFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", updateFullscreenState);
   }, []);
 
   useEffect(() => {
@@ -509,6 +539,13 @@ export default function App() {
   const weekdayShort = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(now);
   const monthShort = new Intl.DateTimeFormat("en-US", { month: "short" }).format(now);
   const dayNumber = now.getDate();
+  const tvConnection = !isFirebaseConfigured
+    ? { label: "Local", state: "local" }
+    : syncStatus.includes("Synced")
+      ? { label: "Live", state: "live" }
+      : syncStatus.includes("Connecting") || syncStatus.includes("Saving")
+        ? { label: "Connecting", state: "connecting" }
+        : { label: "Offline", state: "offline" };
 
   function logActivity(action: string, recordName?: string) {
     setActivities((current) => [
@@ -774,25 +811,50 @@ export default function App() {
     setWinsInput(String(normalizedWins));
   }
 
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (error) {
+      console.error("Fullscreen request failed:", error);
+    }
+  }
+
   return (
     <main className="app-shell">
-      <div className="top-actions">
+      <div className={`top-actions ${page === "tv" ? "tv-controls" : ""} ${page === "tv" && !areTvControlsVisible ? "tv-controls-hidden" : ""}`}>
         <div className="top-action-buttons">
-          <button className={page === "tv" ? "nav-button active" : "nav-button"} onClick={() => setPage("tv")}>
+          <button
+            className={page === "tv" ? "nav-button active" : "nav-button"}
+            onClick={() => {
+              setAreTvControlsVisible(true);
+              setPage("tv");
+            }}
+          >
             TV Board
           </button>
-          <button className={page === "admin" ? "nav-button active" : "nav-button"} onClick={() => setPage("admin")}>
+          <button
+            className={page === "admin" ? "nav-button active" : "nav-button"}
+            onClick={() => {
+              setAreTvControlsVisible(true);
+              setPage("admin");
+            }}
+          >
             Edit Board
           </button>
+          {page === "tv" ? (
+            <button className="nav-button fullscreen-button" onClick={toggleFullscreen}>
+              {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+            </button>
+          ) : null}
           {page === "admin" && authUser ? (
             <button className="nav-button sign-out-button" onClick={handleSignOut}>
               Sign Out
             </button>
           ) : null}
-        </div>
-        <div className="top-entries-count">
-          <span>Active Entries</span>
-          <strong>{totalEntries}</strong>
         </div>
       </div>
 
@@ -811,7 +873,12 @@ export default function App() {
           </aside>
 
           <div className="board-panel">
-            <h1 className="wins-title">
+            <div className="tv-metrics-header">
+              <div className="tv-active-entries">
+                <span>Active Entries</span>
+                <strong>{totalEntries}</strong>
+              </div>
+              <h1 className="wins-title">
                 TOTAL WINS:{" "}
                 <span
                   className={`wins-celebration ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}
@@ -825,8 +892,13 @@ export default function App() {
                   <span className="win-sparkle sparkle-two" aria-hidden="true">✦</span>
                   <span className="win-sparkle sparkle-three" aria-hidden="true">✦</span>
                 </span>
-            </h1>
-            <BoardTable board={board} />
+              </h1>
+              <div className={`tv-live-status is-${tvConnection.state}`}>
+                <span aria-hidden="true" />
+                {tvConnection.label}
+              </div>
+            </div>
+            <BoardTable board={board} now={now} />
           </div>
         </div>
       ) : showAuthGate ? (
@@ -1303,7 +1375,7 @@ export default function App() {
   );
 }
 
-function BoardTable({ board }: { board: BoardState }) {
+function BoardTable({ board, now }: { board: BoardState; now: Date }) {
   return (
     <div className="modern-board">
       {stageConfig.map((stage) => {
@@ -1311,7 +1383,7 @@ function BoardTable({ board }: { board: BoardState }) {
         const rowCount = Math.max(8, entries.length);
 
         return (
-          <section className="stage-card" key={stage.key}>
+          <section className={`stage-card stage-${stage.key}`} key={stage.key}>
             <div className="stage-header">
               <div>
                 <h2>{stage.title}</h2>
@@ -1340,7 +1412,7 @@ function BoardTable({ board }: { board: BoardState }) {
                       ) : null}
                       {entry?.updatedAt ? (
                         <span className="person-updated" title={new Date(entry.updatedAt).toLocaleString()}>
-                          Upd. {formatLastUpdated(entry.updatedAt)}
+                          Updated {formatRelativeUpdated(entry.updatedAt, now)}
                         </span>
                       ) : null}
                     </div>
