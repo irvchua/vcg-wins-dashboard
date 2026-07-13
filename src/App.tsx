@@ -130,13 +130,14 @@ function formatTime(date: Date): string {
   }).format(date);
 }
 
-function formatLastUpdated(timestamp: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(timestamp));
+function formatRelativeUpdated(timestamp: string, now: Date): string {
+  const elapsedSeconds = Math.max(0, Math.floor((now.getTime() - new Date(timestamp).getTime()) / 1000));
+  if (elapsedSeconds < 60) return "just now";
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m ago`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}h ago`;
+  return `${Math.floor(elapsedHours / 24)}d ago`;
 }
 
 function getTotalEntries(board: BoardState): number {
@@ -270,11 +271,16 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [wins, setWins] = useState<number>(loadInitialWins);
   const [winsInput, setWinsInput] = useState(() => String(loadInitialWins()));
+  const [isWinsDirty, setIsWinsDirty] = useState(false);
+  const [isSavingWins, setIsSavingWins] = useState(false);
+  const [winsSaveMessage, setWinsSaveMessage] = useState("");
   const [winsAnimation, setWinsAnimation] = useState<WinsAnimation | null>(null);
   const [page, setPage] = useState<"tv" | "admin">("tv");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isFirebaseConfigured);
   const [isRemoteReady, setIsRemoteReady] = useState(!isFirebaseConfigured);
+  const [areTvControlsVisible, setAreTvControlsVisible] = useState(true);
+  const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [hasRemoteLegacyBoard, setHasRemoteLegacyBoard] = useState(false);
   const [authError, setAuthError] = useState("");
   const [syncStatus, setSyncStatus] = useState(
@@ -294,6 +300,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (page !== "tv") return;
+
+    let hideTimer = window.setTimeout(() => setAreTvControlsVisible(false), 5000);
+    const revealControls = () => {
+      setAreTvControlsVisible(true);
+      window.clearTimeout(hideTimer);
+      hideTimer = window.setTimeout(() => setAreTvControlsVisible(false), 5000);
+    };
+
+    window.addEventListener("mousemove", revealControls);
+    window.addEventListener("keydown", revealControls);
+    window.addEventListener("touchstart", revealControls);
+    return () => {
+      window.clearTimeout(hideTimer);
+      window.removeEventListener("mousemove", revealControls);
+      window.removeEventListener("keydown", revealControls);
+      window.removeEventListener("touchstart", revealControls);
+    };
+  }, [page]);
+
+  useEffect(() => {
+    const updateFullscreenState = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", updateFullscreenState);
+    return () => document.removeEventListener("fullscreenchange", updateFullscreenState);
+  }, []);
+
+  useEffect(() => {
     const previous = previousWins.current;
     if (previous === wins) return;
 
@@ -309,8 +342,8 @@ export default function App() {
   }, [wins]);
 
   useEffect(() => {
-    if (!isWinsInputFocused.current) setWinsInput(String(wins));
-  }, [wins]);
+    if (!isWinsInputFocused.current && !isWinsDirty) setWinsInput(String(wins));
+  }, [isWinsDirty, wins]);
 
   useEffect(() => {
     if (!isFirebaseConfigured) {
@@ -509,6 +542,13 @@ export default function App() {
   const weekdayShort = new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(now);
   const monthShort = new Intl.DateTimeFormat("en-US", { month: "short" }).format(now);
   const dayNumber = now.getDate();
+  const tvConnection = !isFirebaseConfigured
+    ? { label: "Local", state: "local" }
+    : syncStatus.includes("Synced")
+      ? { label: "Live", state: "live" }
+      : syncStatus.includes("Connecting") || syncStatus.includes("Saving")
+        ? { label: "Connecting", state: "connecting" }
+        : { label: "Offline", state: "offline" };
 
   function logActivity(action: string, recordName?: string) {
     setActivities((current) => [
@@ -756,43 +796,109 @@ export default function App() {
     });
   }
 
-  function commitWinsInput() {
+  async function saveWinsInput() {
+    if (isSavingWins || !isWinsDirty) return;
+
     const trimmedValue = winsInput.trim();
     if (!trimmedValue) {
-      setWinsInput(String(wins));
+      setWinsSaveMessage("Enter a win total");
       return;
     }
 
     const nextWins = Number(trimmedValue);
     if (!Number.isFinite(nextWins)) {
-      setWinsInput(String(wins));
+      setWinsSaveMessage("Enter a valid number");
       return;
     }
 
     const normalizedWins = Math.max(0, Math.trunc(nextWins));
-    setWins(normalizedWins);
-    setWinsInput(String(normalizedWins));
+    if (normalizedWins === wins) {
+      setWinsInput(String(wins));
+      setIsWinsDirty(false);
+      setWinsSaveMessage("No changes to save");
+      return;
+    }
+
+    setIsSavingWins(true);
+    setWinsSaveMessage("");
+
+    if (!isFirebaseConfigured) {
+      setWins(normalizedWins);
+      setWinsInput(String(normalizedWins));
+      setIsWinsDirty(false);
+      setWinsSaveMessage("Saved locally");
+      setIsSavingWins(false);
+      return;
+    }
+
+    const payload = JSON.stringify({ activities, wins: normalizedWins });
+    pendingLocalPayload.current = payload;
+    setSyncStatus("Saving to Firebase...");
+
+    try {
+      await saveBoardData(normalizedWins, activities);
+      lastRemotePayload.current = payload;
+      pendingLocalPayload.current = "";
+      setWins(normalizedWins);
+      setWinsInput(String(normalizedWins));
+      setIsWinsDirty(false);
+      setWinsSaveMessage("Saved");
+      setLastUpdatedAt(new Date().toISOString());
+      setSyncStatus("Synced with Firebase");
+    } catch (error) {
+      console.error("Total Wins save failed:", error);
+      pendingLocalPayload.current = "";
+      setWinsSaveMessage("Save failed — try again");
+      setSyncStatus("Firebase unavailable. Changes not saved.");
+    } finally {
+      setIsSavingWins(false);
+    }
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (error) {
+      console.error("Fullscreen request failed:", error);
+    }
   }
 
   return (
     <main className="app-shell">
-      <div className="top-actions">
+      <div className={`top-actions ${page === "tv" ? "tv-controls" : ""} ${page === "tv" && !areTvControlsVisible ? "tv-controls-hidden" : ""}`}>
         <div className="top-action-buttons">
-          <button className={page === "tv" ? "nav-button active" : "nav-button"} onClick={() => setPage("tv")}>
+          <button
+            className={page === "tv" ? "nav-button active" : "nav-button"}
+            onClick={() => {
+              setAreTvControlsVisible(true);
+              setPage("tv");
+            }}
+          >
             TV Board
           </button>
-          <button className={page === "admin" ? "nav-button active" : "nav-button"} onClick={() => setPage("admin")}>
+          <button
+            className={page === "admin" ? "nav-button active" : "nav-button"}
+            onClick={() => {
+              setAreTvControlsVisible(true);
+              setPage("admin");
+            }}
+          >
             Edit Board
           </button>
+          {page === "tv" ? (
+            <button className="nav-button fullscreen-button" onClick={toggleFullscreen}>
+              {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+            </button>
+          ) : null}
           {page === "admin" && authUser ? (
             <button className="nav-button sign-out-button" onClick={handleSignOut}>
               Sign Out
             </button>
           ) : null}
-        </div>
-        <div className="top-entries-count">
-          <span>Active Entries</span>
-          <strong>{totalEntries}</strong>
         </div>
       </div>
 
@@ -811,7 +917,12 @@ export default function App() {
           </aside>
 
           <div className="board-panel">
-            <h1 className="wins-title">
+            <div className="tv-metrics-header">
+              <div className="tv-active-entries">
+                <span>Active Entries</span>
+                <strong>{totalEntries}</strong>
+              </div>
+              <h1 className="wins-title">
                 TOTAL WINS:{" "}
                 <span
                   className={`wins-celebration ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}
@@ -825,8 +936,13 @@ export default function App() {
                   <span className="win-sparkle sparkle-two" aria-hidden="true">✦</span>
                   <span className="win-sparkle sparkle-three" aria-hidden="true">✦</span>
                 </span>
-            </h1>
-            <BoardTable board={board} />
+              </h1>
+              <div className={`tv-live-status is-${tvConnection.state}`}>
+                <span aria-hidden="true" />
+                {tvConnection.label}
+              </div>
+            </div>
+            <BoardTable board={board} now={now} />
           </div>
         </div>
       ) : showAuthGate ? (
@@ -870,31 +986,54 @@ export default function App() {
             </div>
 
             <div className="admin-actions">
-              <label className={`wins-editor ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}>
-                Total Wins
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={winsInput}
-                  onFocus={(event) => {
-                    isWinsInputFocused.current = true;
-                    event.currentTarget.select();
-                  }}
-                  onChange={(event) => setWinsInput(event.target.value)}
-                  onBlur={() => {
-                    isWinsInputFocused.current = false;
-                    commitWinsInput();
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") event.currentTarget.blur();
-                    if (event.key === "Escape") {
-                      setWinsInput(String(wins));
-                      event.currentTarget.blur();
-                    }
-                  }}
-                />
-              </label>
+              <div className="wins-editor-controls">
+                <label className={`wins-editor ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}>
+                  <span>
+                    Total Wins
+                    {isWinsDirty ? <strong className="unsaved-indicator">Unsaved</strong> : null}
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={winsInput}
+                    onFocus={(event) => {
+                      isWinsInputFocused.current = true;
+                      event.currentTarget.select();
+                    }}
+                    onChange={(event) => {
+                      setWinsInput(event.target.value);
+                      setIsWinsDirty(true);
+                      setWinsSaveMessage("");
+                    }}
+                    onBlur={() => {
+                      isWinsInputFocused.current = false;
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void saveWinsInput();
+                      if (event.key === "Escape") {
+                        setWinsInput(String(wins));
+                        setIsWinsDirty(false);
+                        setWinsSaveMessage("");
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="primary-action-button save-wins-button"
+                  onClick={() => void saveWinsInput()}
+                  disabled={!isWinsDirty || isSavingWins}
+                >
+                  {isSavingWins ? "Saving…" : "Save"}
+                </button>
+                {winsSaveMessage ? (
+                  <span className={`wins-save-message ${winsSaveMessage.includes("failed") || winsSaveMessage.startsWith("Enter") ? "is-error" : ""}`}>
+                    {winsSaveMessage}
+                  </span>
+                ) : null}
+              </div>
 
               <button className="secondary-action-button" onClick={() => setIsArchiveOpen((current) => !current)}>
                 Archive ({archivedEntries.length})
@@ -1303,15 +1442,14 @@ export default function App() {
   );
 }
 
-function BoardTable({ board }: { board: BoardState }) {
+function BoardTable({ board, now }: { board: BoardState; now: Date }) {
   return (
     <div className="modern-board">
-      {stageConfig.map((stage) => {
+      {stageConfig.map((stage, stageIndex) => {
         const entries = board[stage.key];
-        const rowCount = Math.max(8, entries.length);
 
         return (
-          <section className="stage-card" key={stage.key}>
+          <section className={`stage-card stage-${stage.key}`} key={stage.key}>
             <div className="stage-header">
               <div>
                 <h2>{stage.title}</h2>
@@ -1320,38 +1458,140 @@ function BoardTable({ board }: { board: BoardState }) {
               <span className="stage-count">{entries.length}</span>
             </div>
 
-            <div className="stage-list">
-              {Array.from({ length: rowCount }).map((_, index) => {
-                const entry = entries[index];
-                const status = entry?.status ?? "";
-
-                return (
-                  <div className={entry ? "stage-row" : "stage-row empty-row"} key={`${stage.key}-${index}`}>
-                    <div className="person-details">
-                      <span className="person-name">{entry?.name ?? ""}</span>
-                      {entry?.adminInCharge ? (
-                        <span className="person-owner">Admin: {entry.adminInCharge}</span>
-                      ) : null}
-                      {entry?.notes ? (
-                        <span className="person-notes">
-                          <span>NOTE</span>
-                          {entry.notes}
-                        </span>
-                      ) : null}
-                      {entry?.updatedAt ? (
-                        <span className="person-updated" title={new Date(entry.updatedAt).toLocaleString()}>
-                          Updated {formatLastUpdated(entry.updatedAt)}
-                        </span>
-                      ) : null}
-                    </div>
-                    <span className={getBadgeClass(status)}>{status || " "}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <AutoScrollingStageList entries={entries} now={now} stageIndex={stageIndex} />
           </section>
         );
       })}
+    </div>
+  );
+}
+
+function AutoScrollingStageList({
+  entries,
+  now,
+  stageIndex,
+}: {
+  entries: BoardEntry[];
+  now: Date;
+  stageIndex: number;
+}) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const currentStartRef = useRef(0);
+  const [hasOverflow, setHasOverflow] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [startIndex, setStartIndex] = useState(0);
+  const [visibleCount, setVisibleCount] = useState(entries.length || 1);
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return;
+
+    const measure = () => {
+      const rows = Array.from(content.querySelectorAll<HTMLElement>(".stage-row"));
+      const firstRow = rows[0];
+      const secondRow = rows[1];
+      const rowStep = firstRow
+        ? secondRow
+          ? secondRow.offsetTop - firstRow.offsetTop
+          : firstRow.offsetHeight
+        : 1;
+      const nextVisibleCount = Math.max(1, Math.floor((viewport.clientHeight + 1) / Math.max(1, rowStep)));
+      setVisibleCount(Math.min(entries.length || 1, nextVisibleCount));
+      setHasOverflow(content.scrollHeight > viewport.clientHeight + 2);
+      currentStartRef.current = 0;
+      setStartIndex(0);
+      viewport.scrollTop = 0;
+    };
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(content);
+    const initialFrame = window.requestAnimationFrame(measure);
+    return () => {
+      window.cancelAnimationFrame(initialFrame);
+      observer.disconnect();
+    };
+  }, [entries]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content || !hasOverflow || isPaused || prefersReducedMotion) return;
+
+    let timer: number;
+    let resetTimer: number | undefined;
+    const scrollToIndex = (index: number) => {
+      const rows = content.querySelectorAll<HTMLElement>(".stage-row");
+      viewport.scrollTo({ behavior: "smooth", top: rows[index]?.offsetTop ?? 0 });
+      currentStartRef.current = index;
+      setStartIndex(index);
+    };
+
+    const advance = () => {
+      const maximumStart = Math.max(0, entries.length - visibleCount);
+      if (currentStartRef.current >= maximumStart) {
+        timer = window.setTimeout(() => {
+          setIsResetting(true);
+          resetTimer = window.setTimeout(() => {
+            scrollToIndex(0);
+            setIsResetting(false);
+            timer = window.setTimeout(advance, 5000);
+          }, 260);
+        }, 6000);
+        return;
+      }
+
+      scrollToIndex(currentStartRef.current + 1);
+      timer = window.setTimeout(advance, 4000);
+    };
+
+    timer = window.setTimeout(advance, 5000 + stageIndex * 1000);
+    return () => {
+      window.clearTimeout(timer);
+      if (resetTimer) window.clearTimeout(resetTimer);
+    };
+  }, [entries.length, hasOverflow, isPaused, prefersReducedMotion, stageIndex, visibleCount]);
+
+  const visibleEnd = Math.min(entries.length, startIndex + visibleCount);
+
+  return (
+    <div
+      className={`stage-list-viewport ${hasOverflow ? "has-overflow" : ""} ${isResetting ? "is-resetting" : ""}`}
+      ref={viewportRef}
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
+    >
+      <div className="stage-list" ref={contentRef}>
+        {entries.length ? entries.map((entry) => (
+          <div className="stage-row" key={entry.id}>
+            <div className="person-details">
+              <span className="person-name">{entry.name}</span>
+              {entry.adminInCharge ? <span className="person-owner">Admin: {entry.adminInCharge}</span> : null}
+              {entry.notes ? (
+                <span className="person-notes">
+                  <span>NOTE</span>
+                  {entry.notes}
+                </span>
+              ) : null}
+              {entry.updatedAt ? (
+                <span className="person-updated" title={new Date(entry.updatedAt).toLocaleString()}>
+                  Updated {formatRelativeUpdated(entry.updatedAt, now)}
+                </span>
+              ) : null}
+            </div>
+            <span className={getBadgeClass(entry.status)}>{entry.status || " "}</span>
+          </div>
+        )) : <div className="stage-row empty-row" aria-hidden="true" />}
+      </div>
+      {hasOverflow ? (
+        <div className="stage-scroll-status" aria-hidden="true">
+          {startIndex + 1}–{visibleEnd} of {entries.length}
+        </div>
+      ) : null}
     </div>
   );
 }
