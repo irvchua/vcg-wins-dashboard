@@ -342,6 +342,55 @@ body,
   display: grid;
   gap: clamp(4px, .55vh, 6px);
   padding: clamp(6px, .65vw, 8px);
+  transition: opacity .25s ease;
+}
+
+.stage-list-viewport {
+  position: relative;
+  min-height: 0;
+  max-height: calc(100vh - clamp(210px, 24vh, 270px));
+  overflow: hidden;
+  scroll-behavior: smooth;
+  scrollbar-width: none;
+}
+
+.stage-list-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.stage-list-viewport.has-overflow::after {
+  content: "";
+  position: sticky;
+  z-index: 2;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 34px;
+  display: block;
+  margin-top: -34px;
+  background: linear-gradient(transparent, rgba(8, 14, 25, .9));
+  pointer-events: none;
+}
+
+.stage-list-viewport.is-resetting .stage-list {
+  opacity: 0;
+}
+
+.stage-scroll-status {
+  position: sticky;
+  z-index: 3;
+  right: 7px;
+  bottom: 6px;
+  width: fit-content;
+  margin: -22px 7px 6px auto;
+  padding: 3px 7px;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 999px;
+  background: rgba(5, 9, 16, .82);
+  color: rgba(255,255,255,.7);
+  font-size: 9px;
+  font-weight: 900;
+  pointer-events: none;
 }
 
 .stage-row {
@@ -888,6 +937,42 @@ body,
   font-weight: 800;
 }
 
+.wins-editor-controls {
+  display: grid;
+  grid-template-columns: 160px auto;
+  align-items: end;
+  gap: 7px 8px;
+}
+
+.wins-editor > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.unsaved-indicator {
+  color: #f8d26a;
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.save-wins-button {
+  min-height: 55px;
+}
+
+.wins-save-message {
+  grid-column: 1 / -1;
+  color: rgba(255,255,255,.62);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.wins-save-message.is-error {
+  color: #ff9b9b;
+}
+
 .wins-editor input {
   width: 160px;
   padding: 12px;
@@ -1388,6 +1473,10 @@ body,
     flex: 1 1 180px;
   }
 
+  .wins-editor-controls {
+    flex: 1 1 260px;
+  }
+
   .wins-editor input {
     width: 100%;
   }
@@ -1449,6 +1538,15 @@ body,
     animation: none;
   }
 
+  .stage-list-viewport.has-overflow {
+    overflow-y: auto;
+    scroll-behavior: auto;
+  }
+
+  .stage-list {
+    transition: none;
+  }
+
   .win-sparkle,
   .wins-delta {
     display: none;
@@ -1469,7 +1567,7 @@ body,
   }
 
   .admin-actions .secondary-action-button,
-  .wins-editor {
+  .wins-editor-controls {
     flex-basis: 100%;
   }
 

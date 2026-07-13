@@ -271,6 +271,9 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [wins, setWins] = useState<number>(loadInitialWins);
   const [winsInput, setWinsInput] = useState(() => String(loadInitialWins()));
+  const [isWinsDirty, setIsWinsDirty] = useState(false);
+  const [isSavingWins, setIsSavingWins] = useState(false);
+  const [winsSaveMessage, setWinsSaveMessage] = useState("");
   const [winsAnimation, setWinsAnimation] = useState<WinsAnimation | null>(null);
   const [page, setPage] = useState<"tv" | "admin">("tv");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -339,8 +342,8 @@ export default function App() {
   }, [wins]);
 
   useEffect(() => {
-    if (!isWinsInputFocused.current) setWinsInput(String(wins));
-  }, [wins]);
+    if (!isWinsInputFocused.current && !isWinsDirty) setWinsInput(String(wins));
+  }, [isWinsDirty, wins]);
 
   useEffect(() => {
     if (!isFirebaseConfigured) {
@@ -793,22 +796,63 @@ export default function App() {
     });
   }
 
-  function commitWinsInput() {
+  async function saveWinsInput() {
+    if (isSavingWins || !isWinsDirty) return;
+
     const trimmedValue = winsInput.trim();
     if (!trimmedValue) {
-      setWinsInput(String(wins));
+      setWinsSaveMessage("Enter a win total");
       return;
     }
 
     const nextWins = Number(trimmedValue);
     if (!Number.isFinite(nextWins)) {
-      setWinsInput(String(wins));
+      setWinsSaveMessage("Enter a valid number");
       return;
     }
 
     const normalizedWins = Math.max(0, Math.trunc(nextWins));
-    setWins(normalizedWins);
-    setWinsInput(String(normalizedWins));
+    if (normalizedWins === wins) {
+      setWinsInput(String(wins));
+      setIsWinsDirty(false);
+      setWinsSaveMessage("No changes to save");
+      return;
+    }
+
+    setIsSavingWins(true);
+    setWinsSaveMessage("");
+
+    if (!isFirebaseConfigured) {
+      setWins(normalizedWins);
+      setWinsInput(String(normalizedWins));
+      setIsWinsDirty(false);
+      setWinsSaveMessage("Saved locally");
+      setIsSavingWins(false);
+      return;
+    }
+
+    const payload = JSON.stringify({ activities, wins: normalizedWins });
+    pendingLocalPayload.current = payload;
+    setSyncStatus("Saving to Firebase...");
+
+    try {
+      await saveBoardData(normalizedWins, activities);
+      lastRemotePayload.current = payload;
+      pendingLocalPayload.current = "";
+      setWins(normalizedWins);
+      setWinsInput(String(normalizedWins));
+      setIsWinsDirty(false);
+      setWinsSaveMessage("Saved");
+      setLastUpdatedAt(new Date().toISOString());
+      setSyncStatus("Synced with Firebase");
+    } catch (error) {
+      console.error("Total Wins save failed:", error);
+      pendingLocalPayload.current = "";
+      setWinsSaveMessage("Save failed — try again");
+      setSyncStatus("Firebase unavailable. Changes not saved.");
+    } finally {
+      setIsSavingWins(false);
+    }
   }
 
   async function toggleFullscreen() {
@@ -942,31 +986,54 @@ export default function App() {
             </div>
 
             <div className="admin-actions">
-              <label className={`wins-editor ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}>
-                Total Wins
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  value={winsInput}
-                  onFocus={(event) => {
-                    isWinsInputFocused.current = true;
-                    event.currentTarget.select();
-                  }}
-                  onChange={(event) => setWinsInput(event.target.value)}
-                  onBlur={() => {
-                    isWinsInputFocused.current = false;
-                    commitWinsInput();
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") event.currentTarget.blur();
-                    if (event.key === "Escape") {
-                      setWinsInput(String(wins));
-                      event.currentTarget.blur();
-                    }
-                  }}
-                />
-              </label>
+              <div className="wins-editor-controls">
+                <label className={`wins-editor ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}>
+                  <span>
+                    Total Wins
+                    {isWinsDirty ? <strong className="unsaved-indicator">Unsaved</strong> : null}
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={winsInput}
+                    onFocus={(event) => {
+                      isWinsInputFocused.current = true;
+                      event.currentTarget.select();
+                    }}
+                    onChange={(event) => {
+                      setWinsInput(event.target.value);
+                      setIsWinsDirty(true);
+                      setWinsSaveMessage("");
+                    }}
+                    onBlur={() => {
+                      isWinsInputFocused.current = false;
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void saveWinsInput();
+                      if (event.key === "Escape") {
+                        setWinsInput(String(wins));
+                        setIsWinsDirty(false);
+                        setWinsSaveMessage("");
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="primary-action-button save-wins-button"
+                  onClick={() => void saveWinsInput()}
+                  disabled={!isWinsDirty || isSavingWins}
+                >
+                  {isSavingWins ? "Saving…" : "Save"}
+                </button>
+                {winsSaveMessage ? (
+                  <span className={`wins-save-message ${winsSaveMessage.includes("failed") || winsSaveMessage.startsWith("Enter") ? "is-error" : ""}`}>
+                    {winsSaveMessage}
+                  </span>
+                ) : null}
+              </div>
 
               <button className="secondary-action-button" onClick={() => setIsArchiveOpen((current) => !current)}>
                 Archive ({archivedEntries.length})
@@ -1378,9 +1445,8 @@ export default function App() {
 function BoardTable({ board, now }: { board: BoardState; now: Date }) {
   return (
     <div className="modern-board">
-      {stageConfig.map((stage) => {
+      {stageConfig.map((stage, stageIndex) => {
         const entries = board[stage.key];
-        const rowCount = Math.max(8, entries.length);
 
         return (
           <section className={`stage-card stage-${stage.key}`} key={stage.key}>
@@ -1392,38 +1458,140 @@ function BoardTable({ board, now }: { board: BoardState; now: Date }) {
               <span className="stage-count">{entries.length}</span>
             </div>
 
-            <div className="stage-list">
-              {Array.from({ length: rowCount }).map((_, index) => {
-                const entry = entries[index];
-                const status = entry?.status ?? "";
-
-                return (
-                  <div className={entry ? "stage-row" : "stage-row empty-row"} key={`${stage.key}-${index}`}>
-                    <div className="person-details">
-                      <span className="person-name">{entry?.name ?? ""}</span>
-                      {entry?.adminInCharge ? (
-                        <span className="person-owner">Admin: {entry.adminInCharge}</span>
-                      ) : null}
-                      {entry?.notes ? (
-                        <span className="person-notes">
-                          <span>NOTE</span>
-                          {entry.notes}
-                        </span>
-                      ) : null}
-                      {entry?.updatedAt ? (
-                        <span className="person-updated" title={new Date(entry.updatedAt).toLocaleString()}>
-                          Updated {formatRelativeUpdated(entry.updatedAt, now)}
-                        </span>
-                      ) : null}
-                    </div>
-                    <span className={getBadgeClass(status)}>{status || " "}</span>
-                  </div>
-                );
-              })}
-            </div>
+            <AutoScrollingStageList entries={entries} now={now} stageIndex={stageIndex} />
           </section>
         );
       })}
+    </div>
+  );
+}
+
+function AutoScrollingStageList({
+  entries,
+  now,
+  stageIndex,
+}: {
+  entries: BoardEntry[];
+  now: Date;
+  stageIndex: number;
+}) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const currentStartRef = useRef(0);
+  const [hasOverflow, setHasOverflow] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [startIndex, setStartIndex] = useState(0);
+  const [visibleCount, setVisibleCount] = useState(entries.length || 1);
+  const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content) return;
+
+    const measure = () => {
+      const rows = Array.from(content.querySelectorAll<HTMLElement>(".stage-row"));
+      const firstRow = rows[0];
+      const secondRow = rows[1];
+      const rowStep = firstRow
+        ? secondRow
+          ? secondRow.offsetTop - firstRow.offsetTop
+          : firstRow.offsetHeight
+        : 1;
+      const nextVisibleCount = Math.max(1, Math.floor((viewport.clientHeight + 1) / Math.max(1, rowStep)));
+      setVisibleCount(Math.min(entries.length || 1, nextVisibleCount));
+      setHasOverflow(content.scrollHeight > viewport.clientHeight + 2);
+      currentStartRef.current = 0;
+      setStartIndex(0);
+      viewport.scrollTop = 0;
+    };
+
+    const observer = new ResizeObserver(measure);
+    observer.observe(viewport);
+    observer.observe(content);
+    const initialFrame = window.requestAnimationFrame(measure);
+    return () => {
+      window.cancelAnimationFrame(initialFrame);
+      observer.disconnect();
+    };
+  }, [entries]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const content = contentRef.current;
+    if (!viewport || !content || !hasOverflow || isPaused || prefersReducedMotion) return;
+
+    let timer: number;
+    let resetTimer: number | undefined;
+    const scrollToIndex = (index: number) => {
+      const rows = content.querySelectorAll<HTMLElement>(".stage-row");
+      viewport.scrollTo({ behavior: "smooth", top: rows[index]?.offsetTop ?? 0 });
+      currentStartRef.current = index;
+      setStartIndex(index);
+    };
+
+    const advance = () => {
+      const maximumStart = Math.max(0, entries.length - visibleCount);
+      if (currentStartRef.current >= maximumStart) {
+        timer = window.setTimeout(() => {
+          setIsResetting(true);
+          resetTimer = window.setTimeout(() => {
+            scrollToIndex(0);
+            setIsResetting(false);
+            timer = window.setTimeout(advance, 5000);
+          }, 260);
+        }, 6000);
+        return;
+      }
+
+      scrollToIndex(currentStartRef.current + 1);
+      timer = window.setTimeout(advance, 4000);
+    };
+
+    timer = window.setTimeout(advance, 5000 + stageIndex * 1000);
+    return () => {
+      window.clearTimeout(timer);
+      if (resetTimer) window.clearTimeout(resetTimer);
+    };
+  }, [entries.length, hasOverflow, isPaused, prefersReducedMotion, stageIndex, visibleCount]);
+
+  const visibleEnd = Math.min(entries.length, startIndex + visibleCount);
+
+  return (
+    <div
+      className={`stage-list-viewport ${hasOverflow ? "has-overflow" : ""} ${isResetting ? "is-resetting" : ""}`}
+      ref={viewportRef}
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
+    >
+      <div className="stage-list" ref={contentRef}>
+        {entries.length ? entries.map((entry) => (
+          <div className="stage-row" key={entry.id}>
+            <div className="person-details">
+              <span className="person-name">{entry.name}</span>
+              {entry.adminInCharge ? <span className="person-owner">Admin: {entry.adminInCharge}</span> : null}
+              {entry.notes ? (
+                <span className="person-notes">
+                  <span>NOTE</span>
+                  {entry.notes}
+                </span>
+              ) : null}
+              {entry.updatedAt ? (
+                <span className="person-updated" title={new Date(entry.updatedAt).toLocaleString()}>
+                  Updated {formatRelativeUpdated(entry.updatedAt, now)}
+                </span>
+              ) : null}
+            </div>
+            <span className={getBadgeClass(entry.status)}>{entry.status || " "}</span>
+          </div>
+        )) : <div className="stage-row empty-row" aria-hidden="true" />}
+      </div>
+      {hasOverflow ? (
+        <div className="stage-scroll-status" aria-hidden="true">
+          {startIndex + 1}–{visibleEnd} of {entries.length}
+        </div>
+      ) : null}
     </div>
   );
 }
