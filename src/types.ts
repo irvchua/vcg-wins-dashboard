@@ -9,6 +9,9 @@ export type BoardEntry = {
   adminInCharge: string;
   status: StatusLabel;
   notes?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  version?: number;
 };
 
 export type BoardState = Record<StageKey, BoardEntry[]>;
@@ -16,4 +19,12 @@ export type BoardState = Record<StageKey, BoardEntry[]>;
 export type ArchivedEntry = BoardEntry & {
   archivedAt: string;
   archivedFrom: StageKey;
+};
+
+export type ActivityEntry = {
+  id: string;
+  action: string;
+  actor: string;
+  createdAt: string;
+  recordName?: string;
 };

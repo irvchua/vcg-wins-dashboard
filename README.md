@@ -22,23 +22,26 @@ Set `VITE_FIREBASE_BOARD_ID` separately for each Vercel environment:
 
 This keeps test deployments and local changes from writing to the production records. The app will not connect to Firebase unless `VITE_FIREBASE_BOARD_ID` is set explicitly.
 
-To protect editing, enable Google sign-in in Firebase Authentication and set `VITE_AUTHORIZED_DOMAINS` in Vercel to the comma-separated list of email domains allowed to edit the board:
+To protect editing, enable Google sign-in in Firebase Authentication. The app only allows Google accounts from these two domains:
 
 ```txt
-VITE_AUTHORIZED_DOMAINS=veteranschoiceglobal.com
+jcmchcorp.com
+veteranschoiceglobal.com
 ```
 
-You can also allow specific extra email addresses:
+Keep the matching environment value in Vercel for configuration visibility:
 
 ```txt
-VITE_AUTHORIZED_EMAILS=contractor@gmail.com,partner@example.org
+VITE_AUTHORIZED_DOMAINS=jcmchcorp.com,veteranschoiceglobal.com
 ```
 
-The TV board remains viewable. The Edit Board view requires Google sign-in when Firebase is configured. If both `VITE_AUTHORIZED_DOMAINS` and `VITE_AUTHORIZED_EMAILS` are empty, any signed-in Google user can edit, so set at least one of these variables in production.
+The TV board remains viewable. The Edit Board view requires Google sign-in when Firebase is configured. Individual email exceptions and other domains are not accepted.
 
 ## Firebase persistence
 
-The board persists to Firestore when Firebase environment variables are configured. It still writes a local backup to `localStorage`, so the app can run before Firebase is connected or during a temporary Firebase outage.
+Board metadata is stored in `winsBoards/{boardId}` and each record is stored independently in the `winsBoards/{boardId}/records` subcollection. Existing single-document board data is migrated automatically the first time an approved editor opens the board after this version is deployed. It still writes a local backup to `localStorage`.
+
+Record edits use version-checked Firestore transactions. If another editor updates the same record while an edit modal is open, the stale save is rejected and the editor is prompted to reload the latest version.
 
 1. Create a Firebase project.
 2. Create a Web app in Firebase project settings.
@@ -46,12 +49,14 @@ The board persists to Firestore when Firebase environment variables are configur
 4. Copy `.env.example` to `.env`.
 5. Fill in the `VITE_FIREBASE_*` values from the Firebase Web app config.
 6. Set `VITE_FIREBASE_BOARD_ID` to the Firestore document you want this environment to use.
-7. Run the app with `npm run dev`.
+7. Deploy the included Firestore rules with `firebase deploy --only firestore:rules`, or paste `firestore.rules` into the Firebase Console Rules tab and publish them.
+8. Run the app with `npm run dev`.
 
-The app stores one document at:
+The app stores board metadata and individual record documents at:
 
 ```txt
 winsBoards/main-board
+winsBoards/main-board/records/{recordId}
 ```
 
 You can change `main-board` by setting `VITE_FIREBASE_BOARD_ID`.
@@ -64,18 +69,4 @@ VITE_FIREBASE_ALLOW_INITIAL_SEED=true
 
 Leave this off in normal production and preview deployments.
 
-For simple internal use, start Firestore rules with your preferred access model. During development only, an open rule looks like:
-
-```txt
-rules_version = '2';
-
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /winsBoards/{boardId} {
-      allow read, write: if true;
-    }
-  }
-}
-```
-
-Before deploying publicly, replace that with authenticated or domain-restricted access.
+The included `firestore.rules` keeps board reads public for the TV display and restricts all writes to authenticated accounts from the approved company domains.
