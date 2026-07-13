@@ -132,7 +132,7 @@ function formatTime(date: Date): string {
 
 function formatLastUpdated(timestamp: string): string {
   return new Intl.DateTimeFormat("en-US", {
-    month: "short",
+    month: "numeric",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
@@ -1340,7 +1340,7 @@ function BoardTable({ board }: { board: BoardState }) {
                       ) : null}
                       {entry?.updatedAt ? (
                         <span className="person-updated" title={new Date(entry.updatedAt).toLocaleString()}>
-                          Updated {formatLastUpdated(entry.updatedAt)}
+                          Upd. {formatLastUpdated(entry.updatedAt)}
                         </span>
                       ) : null}
                     </div>
