@@ -7,6 +7,7 @@ import {
   isFirebaseConfigured,
   migrateLegacyBoardRecords,
   RecordConflictError,
+  saveAnnouncement,
   saveBoardRecord,
   saveBoardData,
   shouldSeedMissingFirebaseBoard,
@@ -45,6 +46,9 @@ const ARCHIVED_STORAGE_KEY = "vcg-wins-board-archive";
 const WINS_STORAGE_KEY = "vcg-total-wins";
 const ACTIVITY_STORAGE_KEY = "vcg-wins-board-activity";
 const NOTE_MAX_LENGTH = 80;
+const CELEBRATION_VISUAL_DURATION_MS = 33_000;
+const ANNOUNCEMENT_EDITOR_EMAIL = "admin@veteranschoiceglobal.com";
+const ANNOUNCEMENT_MAX_LENGTH = 240;
 
 const emptyBoard: BoardState = {
   appeals: [],
@@ -247,6 +251,10 @@ function loadInitialActivities(): ActivityEntry[] {
 
 export default function App() {
   const [activities, setActivities] = useState<ActivityEntry[]>(loadInitialActivities);
+  const [announcement, setAnnouncement] = useState("");
+  const [announcementInput, setAnnouncementInput] = useState("");
+  const [announcementSaveMessage, setAnnouncementSaveMessage] = useState("");
+  const [isSavingAnnouncement, setIsSavingAnnouncement] = useState(false);
   const [now, setNow] = useState(new Date());
   const [addRecordDraft, setAddRecordDraft] = useState<AddRecordDraft>(defaultAddRecordDraft);
   const [archivedEntries, setArchivedEntries] = useState<ArchivedEntry[]>(loadInitialArchivedEntries);
@@ -275,6 +283,15 @@ export default function App() {
   const [isSavingWins, setIsSavingWins] = useState(false);
   const [winsSaveMessage, setWinsSaveMessage] = useState("");
   const [winsAnimation, setWinsAnimation] = useState<WinsAnimation | null>(null);
+  const [isCelebrationSoundEnabled, setIsCelebrationSoundEnabled] = useState(true);
+  const [isCelebrationSoundUnlocked, setIsCelebrationSoundUnlocked] = useState(false);
+  const [isCelebrationSoundPlaying, setIsCelebrationSoundPlaying] = useState(false);
+  const [isCelebrationActive, setIsCelebrationActive] = useState(false);
+  const [celebrationSoundError, setCelebrationSoundError] = useState("");
+  const [areAssetsLoaded, setAreAssetsLoaded] = useState(false);
+  const [assetLoadError, setAssetLoadError] = useState("");
+  const [loadedAssetCount, setLoadedAssetCount] = useState(0);
+  const [assetLoadAttempt, setAssetLoadAttempt] = useState(0);
   const [page, setPage] = useState<"tv" | "admin">("tv");
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [isAuthLoading, setIsAuthLoading] = useState(isFirebaseConfigured);
@@ -293,6 +310,71 @@ export default function App() {
   const previousWins = useRef(wins);
   const hasReceivedInitialWins = useRef(!isFirebaseConfigured);
   const isWinsInputFocused = useRef(false);
+  const winnerAnnouncementAudio = useRef<HTMLAudioElement | null>(null);
+  const applauseAudio = useRef<HTMLAudioElement | null>(null);
+  const youWinAudio = useRef<HTMLAudioElement | null>(null);
+  const celebrationSequence = useRef(0);
+  const celebrationVisualTimer = useRef<number | null>(null);
+  const isUnlockingCelebrationAudio = useRef(false);
+  const isAnnouncementDirty = useRef(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    winnerAnnouncementAudio.current ??= new Audio("/winner-announcement.wav");
+    applauseAudio.current ??= new Audio("/applause.wav");
+    youWinAudio.current ??= new Audio("/you-win.wav");
+
+    const preloadAudio = (audio: HTMLAudioElement) => new Promise<void>((resolve, reject) => {
+      if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+        resolve();
+        return;
+      }
+      const loaded = () => {
+        cleanup();
+        resolve();
+      };
+      const failed = () => {
+        cleanup();
+        reject(new Error(`Could not load ${audio.src}`));
+      };
+      const cleanup = () => {
+        audio.removeEventListener("canplaythrough", loaded);
+        audio.removeEventListener("error", failed);
+      };
+      audio.addEventListener("canplaythrough", loaded);
+      audio.addEventListener("error", failed);
+      audio.preload = "auto";
+      audio.load();
+    });
+
+    const preloadImage = (source: string) => new Promise<void>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error(`Could not load ${source}`));
+      image.src = source;
+    });
+
+    const assets = [
+      preloadAudio(winnerAnnouncementAudio.current),
+      preloadAudio(applauseAudio.current),
+      preloadAudio(youWinAudio.current),
+      preloadImage("/vcg-logo.png"),
+    ].map((asset) => asset.then(() => {
+      if (!cancelled) setLoadedAssetCount((count) => count + 1);
+    }));
+
+    Promise.all(assets)
+      .then(() => {
+        if (!cancelled) setAreAssetsLoaded(true);
+      })
+      .catch((error) => {
+        console.error("Asset preload failed:", error);
+        if (!cancelled) setAssetLoadError("Some celebration assets could not be loaded.");
+      });
+
+    return () => { cancelled = true; };
+  }, [assetLoadAttempt]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000);
@@ -337,9 +419,42 @@ export default function App() {
       id: Date.now(),
     };
     setWinsAnimation(animation);
+    if (animation.direction === "increase" && page === "tv") startCelebration();
     const timer = window.setTimeout(() => setWinsAnimation(null), 1400);
     return () => window.clearTimeout(timer);
-  }, [wins]);
+    // A change in the win total is the event; sound-control state must not replay it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, wins]);
+
+  useEffect(() => () => {
+    celebrationSequence.current += 1;
+    [winnerAnnouncementAudio.current, applauseAudio.current, youWinAudio.current].forEach((audio) => {
+      if (!audio) return;
+      audio.pause();
+      audio.onended = null;
+    });
+    if (celebrationVisualTimer.current !== null) window.clearTimeout(celebrationVisualTimer.current);
+  }, []);
+
+  useEffect(() => {
+    if (page !== "tv" && (isCelebrationSoundPlaying || isCelebrationActive)) stopCelebration();
+    // Page changes are the only trigger; playback state is read to avoid redundant stops.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+
+  useEffect(() => {
+    if (!isCelebrationSoundEnabled || isCelebrationSoundUnlocked) return;
+
+    const unlockOnFirstInteraction = () => void enableCelebrationSound();
+    window.addEventListener("pointerdown", unlockOnFirstInteraction);
+    window.addEventListener("keydown", unlockOnFirstInteraction);
+    return () => {
+      window.removeEventListener("pointerdown", unlockOnFirstInteraction);
+      window.removeEventListener("keydown", unlockOnFirstInteraction);
+    };
+    // Sound authorization is intentionally attempted only when enabled state changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCelebrationSoundEnabled, isCelebrationSoundUnlocked]);
 
   useEffect(() => {
     if (!isWinsInputFocused.current && !isWinsDirty) setWinsInput(String(wins));
@@ -389,6 +504,8 @@ export default function App() {
         }
 
         const nextActivities = remoteData.activities ?? [];
+        setAnnouncement(remoteData.announcement ?? "");
+        if (!isAnnouncementDirty.current) setAnnouncementInput(remoteData.announcement ?? "");
         setHasRemoteLegacyBoard(remoteData.hasLegacyBoard);
         const nextArchivedEntries = normalizeArchivedEntries(remoteData.archivedEntries);
         const nextBoard = normalizeBoard(remoteData.board);
@@ -855,6 +972,141 @@ export default function App() {
     }
   }
 
+  async function saveAnnouncementInput() {
+    if (isSavingAnnouncement || authUser?.email.toLowerCase() !== ANNOUNCEMENT_EDITOR_EMAIL) return;
+    const nextAnnouncement = announcementInput.trim().slice(0, ANNOUNCEMENT_MAX_LENGTH);
+    setIsSavingAnnouncement(true);
+    setAnnouncementSaveMessage("");
+    try {
+      if (isFirebaseConfigured) await saveAnnouncement(nextAnnouncement);
+      setAnnouncement(nextAnnouncement);
+      setAnnouncementInput(nextAnnouncement);
+      isAnnouncementDirty.current = false;
+      setAnnouncementSaveMessage("Saved");
+    } catch (error) {
+      console.error("Announcement save failed:", error);
+      setAnnouncementSaveMessage("Save failed");
+    } finally {
+      setIsSavingAnnouncement(false);
+    }
+  }
+
+  function stopCelebrationSound() {
+    celebrationSequence.current += 1;
+    [winnerAnnouncementAudio.current, applauseAudio.current, youWinAudio.current].forEach((audio) => {
+      if (!audio) return;
+      audio.pause();
+      audio.currentTime = 0;
+      audio.loop = false;
+      audio.onended = null;
+    });
+    setIsCelebrationSoundPlaying(false);
+  }
+
+  function stopCelebration() {
+    stopCelebrationSound();
+    if (celebrationVisualTimer.current !== null) {
+      window.clearTimeout(celebrationVisualTimer.current);
+      celebrationVisualTimer.current = null;
+    }
+    setIsCelebrationActive(false);
+  }
+
+  function startCelebration() {
+    if (page !== "tv") return;
+    if (celebrationVisualTimer.current !== null) window.clearTimeout(celebrationVisualTimer.current);
+    setIsCelebrationActive(true);
+    celebrationVisualTimer.current = window.setTimeout(() => {
+      celebrationVisualTimer.current = null;
+      setIsCelebrationActive(false);
+    }, CELEBRATION_VISUAL_DURATION_MS);
+    playCelebrationSound();
+  }
+
+  function disableCelebrationSound() {
+    stopCelebration();
+    setIsCelebrationSoundEnabled(false);
+    setIsCelebrationSoundUnlocked(false);
+    setCelebrationSoundError("");
+  }
+
+  async function enableCelebrationSound() {
+    if (isUnlockingCelebrationAudio.current || isCelebrationSoundUnlocked) return;
+    isUnlockingCelebrationAudio.current = true;
+    try {
+      winnerAnnouncementAudio.current ??= new Audio("/winner-announcement.wav");
+      applauseAudio.current ??= new Audio("/applause.wav");
+      youWinAudio.current ??= new Audio("/you-win.wav");
+      const audioClips = [winnerAnnouncementAudio.current, applauseAudio.current, youWinAudio.current];
+      audioClips.forEach((audio) => {
+        audio.preload = "auto";
+        audio.muted = false;
+        audio.volume = 0.001;
+      });
+
+      const unlockResults = await Promise.allSettled(audioClips.map((audio) => audio.play()));
+      audioClips.forEach((audio) => {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.volume = 1;
+      });
+
+      const failedUnlock = unlockResults.find((result) => result.status === "rejected");
+      if (failedUnlock?.status === "rejected") {
+        console.debug("Audio activation was deferred:", failedUnlock.reason);
+        setIsCelebrationSoundUnlocked(false);
+        return;
+      }
+
+      setCelebrationSoundError("");
+      setIsCelebrationSoundEnabled(true);
+      setIsCelebrationSoundUnlocked(true);
+    } finally {
+      isUnlockingCelebrationAudio.current = false;
+    }
+  }
+
+  function playCelebrationSound() {
+    const announcement = winnerAnnouncementAudio.current;
+    const applause = applauseAudio.current;
+    const youWin = youWinAudio.current;
+    if (!isCelebrationSoundEnabled || !isCelebrationSoundUnlocked || !announcement || !applause || !youWin) return;
+
+    stopCelebrationSound();
+    const sequence = celebrationSequence.current;
+    setIsCelebrationSoundPlaying(true);
+    announcement.onended = () => {
+      if (sequence !== celebrationSequence.current) return;
+      announcement.onended = null;
+      applause.currentTime = 0;
+      applause.loop = false;
+      applause.onended = () => {
+        if (sequence !== celebrationSequence.current) return;
+        applause.onended = null;
+        youWin.currentTime = 0;
+        youWin.onended = () => {
+          youWin.onended = null;
+          setIsCelebrationSoundPlaying(false);
+          setIsCelebrationActive(false);
+          if (celebrationVisualTimer.current !== null) {
+            window.clearTimeout(celebrationVisualTimer.current);
+            celebrationVisualTimer.current = null;
+          }
+        };
+        void youWin.play().catch((error) => handleCelebrationPlaybackError("You Win", error));
+      };
+      void applause.play().catch((error) => handleCelebrationPlaybackError("applause", error));
+    };
+    void announcement.play().catch((error) => handleCelebrationPlaybackError("win announcement", error));
+  }
+
+  function handleCelebrationPlaybackError(clip: string, error: unknown) {
+    console.error(`Celebration ${clip} playback failed:`, error);
+    stopCelebrationSound();
+    setIsCelebrationSoundUnlocked(false);
+    setCelebrationSoundError(`Browser blocked ${clip}. Click the TV Board once, then test again.`);
+  }
+
   async function toggleFullscreen() {
     try {
       if (document.fullscreenElement) {
@@ -868,7 +1120,13 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${page === "tv" && announcement ? "has-announcement" : ""}`}>
+      {page === "tv" && isCelebrationActive ? <CanvasFireworks /> : null}
+      {page === "tv" && announcement ? (
+        <div className="announcement-banner" role="status" aria-label="Announcement">
+          <div><span>{announcement}</span><span aria-hidden="true">{announcement}</span></div>
+        </div>
+      ) : null}
       <div className={`top-actions ${page === "tv" ? "tv-controls" : ""} ${page === "tv" && !areTvControlsVisible ? "tv-controls-hidden" : ""}`}>
         <div className="top-action-buttons">
           <button
@@ -890,9 +1148,29 @@ export default function App() {
             Edit Board
           </button>
           {page === "tv" ? (
-            <button className="nav-button fullscreen-button" onClick={toggleFullscreen}>
-              {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
-            </button>
+            <>
+              <button
+                className={`nav-button sound-button ${isCelebrationSoundEnabled ? "is-enabled" : ""}`}
+                onClick={() => isCelebrationSoundEnabled ? disableCelebrationSound() : void enableCelebrationSound()}
+              >
+                {isCelebrationSoundPlaying ? "Stop Sound" : isCelebrationSoundEnabled ? "Disable Sound" : "Enable Sound"}
+              </button>
+              {celebrationSoundError ? <span className="sound-error" role="alert">{celebrationSoundError}</span> : null}
+              {!areAssetsLoaded ? (
+                <span className="sound-load-status">
+                  {assetLoadError ? (
+                    <button onClick={() => {
+                      setAssetLoadError("");
+                      setLoadedAssetCount(0);
+                      setAssetLoadAttempt((attempt) => attempt + 1);
+                    }}>Retry sound assets</button>
+                  ) : `Loading sound assets… ${loadedAssetCount}/4`}
+                </span>
+              ) : null}
+              <button className="nav-button fullscreen-button" onClick={toggleFullscreen}>
+                {isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              </button>
+            </>
           ) : null}
           {page === "admin" && authUser ? (
             <button className="nav-button sign-out-button" onClick={handleSignOut}>
@@ -986,6 +1264,34 @@ export default function App() {
             </div>
 
             <div className="admin-actions">
+              {authUser?.email.toLowerCase() === ANNOUNCEMENT_EDITOR_EMAIL ? (
+                <div className="announcement-editor">
+                  <label>
+                    <span>TV announcement</span>
+                    <input
+                      value={announcementInput}
+                      maxLength={ANNOUNCEMENT_MAX_LENGTH}
+                      placeholder="Leave blank to hide the banner"
+                      onChange={(event) => {
+                        isAnnouncementDirty.current = true;
+                        setAnnouncementInput(event.target.value);
+                        setAnnouncementSaveMessage("");
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void saveAnnouncementInput();
+                      }}
+                    />
+                  </label>
+                  <button
+                    className="primary-action-button"
+                    disabled={isSavingAnnouncement || announcementInput.trim() === announcement}
+                    onClick={() => void saveAnnouncementInput()}
+                  >
+                    {isSavingAnnouncement ? "Saving…" : "Save announcement"}
+                  </button>
+                  {announcementSaveMessage ? <span>{announcementSaveMessage}</span> : null}
+                </div>
+              ) : null}
               <div className="wins-editor-controls">
                 <label className={`wins-editor ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}>
                   <span>
@@ -1440,6 +1746,154 @@ export default function App() {
       )}
     </main>
   );
+}
+
+type FireworkParticle = {
+  alpha: number;
+  color: string;
+  decay: number;
+  gravity: number;
+  trail: Array<{ x: number; y: number }>;
+  vx: number;
+  vy: number;
+  x: number;
+  y: number;
+};
+
+type FireworkRocket = FireworkParticle & { targetY: number };
+
+function CanvasFireworks() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const colors = ["#ffd95a", "#ff5d73", "#5ee7ff", "#8dff8a", "#ca8cff", "#ff9d4d", "#ffffff"];
+    const rockets: FireworkRocket[] = [];
+    const sparks: FireworkParticle[] = [];
+    let animationFrame = 0;
+    let nextLaunchAt = 0;
+    let width = 0;
+    let height = 0;
+
+    const resize = () => {
+      const ratio = Math.min(window.devicePixelRatio || 1, 1.25);
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    };
+
+    const launchRocket = () => {
+      const x = width * (0.08 + Math.random() * 0.84);
+      const targetY = height * (0.1 + Math.random() * 0.48);
+      rockets.push({
+        alpha: 1,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        decay: 0,
+        gravity: 0,
+        targetY,
+        trail: [],
+        vx: (Math.random() - 0.5) * 1.1,
+        vy: -(7.5 + Math.random() * 2.8),
+        x,
+        y: height + 12,
+      });
+    };
+
+    const explode = (rocket: FireworkRocket) => {
+      const particleCount = 30 + Math.floor(Math.random() * 18);
+      if (sparks.length + particleCount > 280) {
+        sparks.splice(0, sparks.length + particleCount - 280);
+      }
+      for (let index = 0; index < particleCount; index += 1) {
+        const angle = (Math.PI * 2 * index) / particleCount + Math.random() * 0.08;
+        const speed = 1.5 + Math.random() * 5.2;
+        sparks.push({
+          alpha: 1,
+          color: Math.random() > 0.18 ? rocket.color : colors[Math.floor(Math.random() * colors.length)],
+          decay: 0.009 + Math.random() * 0.012,
+          gravity: 0.045 + Math.random() * 0.025,
+          trail: [],
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          x: rocket.x,
+          y: rocket.y,
+        });
+      }
+    };
+
+    const drawTrail = (particle: FireworkParticle, lineWidth: number) => {
+      if (!particle.trail.length) return;
+      context.beginPath();
+      context.moveTo(particle.trail[0].x, particle.trail[0].y);
+      particle.trail.forEach((point) => context.lineTo(point.x, point.y));
+      context.lineTo(particle.x, particle.y);
+      context.globalAlpha = particle.alpha;
+      context.strokeStyle = particle.color;
+      context.lineWidth = lineWidth;
+      context.lineCap = "round";
+      context.stroke();
+    };
+
+    const animate = (time: number) => {
+      context.clearRect(0, 0, width, height);
+      context.globalCompositeOperation = "lighter";
+
+      if (time >= nextLaunchAt) {
+        launchRocket();
+        if (Math.random() > 0.9 && sparks.length < 220) launchRocket();
+        nextLaunchAt = time + 600 + Math.random() * 600;
+      }
+
+      for (let index = rockets.length - 1; index >= 0; index -= 1) {
+        const rocket = rockets[index];
+        rocket.trail.push({ x: rocket.x, y: rocket.y });
+        if (rocket.trail.length > 7) rocket.trail.shift();
+        rocket.x += rocket.vx;
+        rocket.y += rocket.vy;
+        rocket.vy += 0.025;
+        drawTrail(rocket, 2.2);
+        if (rocket.y <= rocket.targetY || rocket.vy >= -1.2) {
+          explode(rocket);
+          rockets.splice(index, 1);
+        }
+      }
+
+      for (let index = sparks.length - 1; index >= 0; index -= 1) {
+        const spark = sparks[index];
+        spark.trail.push({ x: spark.x, y: spark.y });
+        if (spark.trail.length > 3) spark.trail.shift();
+        spark.vx *= 0.985;
+        spark.vy = spark.vy * 0.985 + spark.gravity;
+        spark.x += spark.vx;
+        spark.y += spark.vy;
+        spark.alpha -= spark.decay;
+        drawTrail(spark, 1.45);
+        if (spark.alpha <= 0) sparks.splice(index, 1);
+      }
+
+      context.globalAlpha = 1;
+      context.globalCompositeOperation = "source-over";
+      animationFrame = window.requestAnimationFrame(animate);
+    };
+
+    resize();
+    window.addEventListener("resize", resize);
+    animationFrame = window.requestAnimationFrame(animate);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("resize", resize);
+    };
+  }, []);
+
+  return <canvas ref={canvasRef} className="fireworks-canvas" aria-hidden="true" />;
 }
 
 function BoardTable({ board, now }: { board: BoardState; now: Date }) {

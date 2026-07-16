@@ -21,6 +21,7 @@ import {
 import type { ActivityEntry, ArchivedEntry, BoardEntry, BoardState, StageKey } from "./types";
 
 type PersistedBoardData = {
+  announcement: string;
   archivedEntries: ArchivedEntry[];
   activities: ActivityEntry[];
   board: BoardState;
@@ -171,6 +172,7 @@ export function subscribeToBoard(
 
     if (!records.length && metadata.board) {
       onData({
+        announcement: typeof metadata.announcement === "string" ? metadata.announcement : "",
         activities: Array.isArray(metadata.activities) ? (metadata.activities as ActivityEntry[]) : [],
         archivedEntries: Array.isArray(metadata.archivedEntries) ? (metadata.archivedEntries as ArchivedEntry[]) : [],
         board: metadata.board as BoardState,
@@ -197,6 +199,7 @@ export function subscribeToBoard(
     });
 
     onData({
+      announcement: typeof metadata.announcement === "string" ? metadata.announcement : "",
       activities: Array.isArray(metadata.activities) ? (metadata.activities as ActivityEntry[]) : [],
       archivedEntries: archivedEntries.sort((a, b) => b.archivedAt.localeCompare(a.archivedAt)),
       board,
@@ -243,6 +246,17 @@ export async function saveBoardData(
     { merge: true }
   );
 
+  return true;
+}
+
+export async function saveAnnouncement(announcement: string) {
+  const boardDocRef = getBoardDocRef();
+  if (!boardDocRef) return false;
+
+  await setDoc(boardDocRef, {
+    announcement: announcement.trim(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true });
   return true;
 }
 

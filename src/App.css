@@ -21,6 +21,84 @@ body,
   overflow-x: auto;
 }
 
+.announcement-banner {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 46;
+  overflow: hidden;
+  height: 42px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid rgba(248, 210, 106, .5);
+  background: linear-gradient(90deg, #6f0910, #a61922, #6f0910);
+  color: white;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .3);
+}
+
+.announcement-banner > div {
+  display: flex;
+  min-width: max-content;
+  animation: announcement-scroll 24s linear infinite;
+}
+
+.announcement-banner span {
+  min-width: 100vw;
+  padding-inline: 4vw;
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: .04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.app-shell.has-announcement .top-actions { top: 52px; }
+.app-shell.has-announcement .tv-layout { padding-top: clamp(58px, 7vh, 82px); }
+
+@keyframes announcement-scroll {
+  to { transform: translateX(-50%); }
+}
+
+.announcement-editor {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(248, 210, 106, .25);
+  border-radius: 14px;
+  background: rgba(248, 210, 106, .07);
+}
+
+.announcement-editor label {
+  flex: 1;
+  display: grid;
+  gap: 6px;
+}
+
+.announcement-editor label > span {
+  color: rgba(255, 255, 255, .68);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.announcement-editor input {
+  width: 100%;
+  min-width: 260px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, .24);
+  color: white;
+}
+
+.fireworks-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  pointer-events: none;
+}
+
 /* NAV */
 
 .top-actions {
@@ -62,6 +140,47 @@ body,
 .nav-button.active {
   background: white;
   color: #111;
+}
+
+.sound-button.is-enabled {
+  border-color: rgba(54, 199, 122, .55);
+  background: rgba(54, 199, 122, .2);
+  color: #a9f5c9;
+}
+
+.sound-error {
+  align-self: center;
+  max-width: 190px;
+  color: #ffb0b0;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sound-load-status {
+  align-self: center;
+  color: rgba(255, 255, 255, .68);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.sound-load-status button {
+  border: 0;
+  background: transparent;
+  color: #ffcf70;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .announcement-banner > div {
+    width: 100%;
+    animation: none;
+  }
+
+  .announcement-banner span[aria-hidden="true"] {
+    display: none;
+  }
 }
 
 .sign-out-button {

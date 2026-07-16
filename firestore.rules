@@ -11,9 +11,26 @@ service cloud.firestore {
         );
     }
 
+    function announcementEditor() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'admin@veteranschoiceglobal.com';
+    }
+
     match /winsBoards/{boardId} {
       allow read: if true;
-      allow write: if approvedEditor();
+      allow create: if approvedEditor()
+        && (!request.resource.data.keys().hasAny(['announcement']) || (
+          announcementEditor()
+          && request.resource.data.announcement is string
+          && request.resource.data.announcement.size() <= 240
+        ));
+      allow update: if approvedEditor()
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['announcement']) || (
+          announcementEditor()
+          && request.resource.data.announcement is string
+          && request.resource.data.announcement.size() <= 240
+        ));
 
       match /records/{recordId} {
         allow read: if true;
