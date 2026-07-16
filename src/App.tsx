@@ -47,7 +47,12 @@ const WINS_STORAGE_KEY = "vcg-total-wins";
 const ACTIVITY_STORAGE_KEY = "vcg-wins-board-activity";
 const NOTE_MAX_LENGTH = 80;
 const CELEBRATION_VISUAL_DURATION_MS = 33_000;
-const ANNOUNCEMENT_EDITOR_EMAIL = "admin@veteranschoiceglobal.com";
+const ANNOUNCEMENT_EDITOR_EMAILS = [
+  "admin@veteranschoiceglobal.com",
+  "le.juico@veteranschoiceglobal.com",
+  "fa.ramos@veteranschoiceglobal.com",
+  "j.sawit@veteranschoiceglobal.com",
+];
 const ANNOUNCEMENT_MAX_LENGTH = 240;
 
 const emptyBoard: BoardState = {
@@ -973,7 +978,7 @@ export default function App() {
   }
 
   async function saveAnnouncementInput() {
-    if (isSavingAnnouncement || authUser?.email.toLowerCase() !== ANNOUNCEMENT_EDITOR_EMAIL) return;
+    if (isSavingAnnouncement || !ANNOUNCEMENT_EDITOR_EMAILS.includes(authUser?.email.toLowerCase() ?? "")) return;
     const nextAnnouncement = announcementInput.trim().slice(0, ANNOUNCEMENT_MAX_LENGTH);
     setIsSavingAnnouncement(true);
     setAnnouncementSaveMessage("");
@@ -1264,7 +1269,7 @@ export default function App() {
             </div>
 
             <div className="admin-actions">
-              {authUser?.email.toLowerCase() === ANNOUNCEMENT_EDITOR_EMAIL ? (
+              {ANNOUNCEMENT_EDITOR_EMAILS.includes(authUser?.email.toLowerCase() ?? "") ? (
                 <div className="announcement-editor">
                   <label>
                     <span>TV announcement</span>

@@ -14,7 +14,12 @@ service cloud.firestore {
     function announcementEditor() {
       return request.auth != null
         && request.auth.token.email_verified == true
-        && request.auth.token.email == 'admin@veteranschoiceglobal.com';
+        && request.auth.token.email in [
+          'admin@veteranschoiceglobal.com',
+          'le.juico@veteranschoiceglobal.com',
+          'fa.ramos@veteranschoiceglobal.com',
+          'j.sawit@veteranschoiceglobal.com'
+        ];
     }
 
     match /winsBoards/{boardId} {
