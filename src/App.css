@@ -240,6 +240,25 @@ body,
   font-weight: 300;
 }
 
+.wins-block {
+  display: grid;
+  justify-items: center;
+  gap: clamp(2px, .6vh, 6px);
+}
+
+.wins-target {
+  color: rgba(255,255,255,.6);
+  font-size: clamp(11px, .9vw, 16px);
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+.wins-target strong {
+  color: #f8d26a;
+  font-size: clamp(13px, 1.05vw, 19px);
+}
+
 .wins-title {
   margin: 0;
   text-align: center;
@@ -471,6 +490,44 @@ body,
   overflow: hidden;
   scroll-behavior: smooth;
   scrollbar-width: none;
+}
+
+/* On landscape TV/desktop widths, fill the viewport exactly via flex so the
+   page can never grow taller than the screen (a cast/remote can't scroll to
+   reach clipped content) regardless of banner state or header height. */
+@media (min-width: 981px) and (orientation: landscape) {
+  .app-shell.tv-page {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  .app-shell.tv-page .tv-layout {
+    height: 100%;
+    align-items: stretch;
+  }
+
+  .board-panel {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modern-board {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .stage-card {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .app-shell.tv-page .stage-list-viewport {
+    flex: 1;
+    max-height: none;
+  }
 }
 
 .stage-list-viewport::-webkit-scrollbar {
@@ -1556,7 +1613,7 @@ body,
     grid-template-columns: 1fr 1fr;
   }
 
-  .wins-title {
+  .wins-block {
     grid-column: 1 / -1;
     grid-row: 1;
   }
