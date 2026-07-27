@@ -44,6 +44,7 @@ type WinsAnimation = {
 const STORAGE_KEY = "vcg-wins-board-data";
 const ARCHIVED_STORAGE_KEY = "vcg-wins-board-archive";
 const WINS_STORAGE_KEY = "vcg-total-wins";
+const WINS_TARGET_STORAGE_KEY = "vcg-wins-target";
 const ACTIVITY_STORAGE_KEY = "vcg-wins-board-activity";
 const NOTE_MAX_LENGTH = 80;
 const CELEBRATION_VISUAL_DURATION_MS = 33_000;
@@ -245,6 +246,16 @@ function loadInitialWins(): number {
   return savedWins ? Number(savedWins) : 104;
 }
 
+function loadInitialWinsTarget(): number {
+  const savedTarget = localStorage.getItem(WINS_TARGET_STORAGE_KEY);
+  return savedTarget ? Number(savedTarget) : 0;
+}
+
+function normalizeWinsEditorValue(value: string, fallback: number): number {
+  const nextValue = Number(value.trim());
+  return Number.isFinite(nextValue) ? Math.max(0, Math.trunc(nextValue)) : fallback;
+}
+
 function loadInitialActivities(): ActivityEntry[] {
   try {
     const saved = localStorage.getItem(ACTIVITY_STORAGE_KEY);
@@ -288,6 +299,11 @@ export default function App() {
   const [isSavingWins, setIsSavingWins] = useState(false);
   const [winsSaveMessage, setWinsSaveMessage] = useState("");
   const [winsAnimation, setWinsAnimation] = useState<WinsAnimation | null>(null);
+  const [winsTarget, setWinsTarget] = useState<number>(loadInitialWinsTarget);
+  const [winsTargetInput, setWinsTargetInput] = useState(() => String(loadInitialWinsTarget()));
+  const [isWinsTargetDirty, setIsWinsTargetDirty] = useState(false);
+  const [isSavingWinsTarget, setIsSavingWinsTarget] = useState(false);
+  const [winsTargetSaveMessage, setWinsTargetSaveMessage] = useState("");
   const [isCelebrationSoundEnabled, setIsCelebrationSoundEnabled] = useState(true);
   const [isCelebrationSoundUnlocked, setIsCelebrationSoundUnlocked] = useState(false);
   const [isCelebrationSoundPlaying, setIsCelebrationSoundPlaying] = useState(false);
@@ -315,6 +331,7 @@ export default function App() {
   const previousWins = useRef(wins);
   const hasReceivedInitialWins = useRef(!isFirebaseConfigured);
   const isWinsInputFocused = useRef(false);
+  const isWinsTargetInputFocused = useRef(false);
   const winnerAnnouncementAudio = useRef<HTMLAudioElement | null>(null);
   const applauseAudio = useRef<HTMLAudioElement | null>(null);
   const youWinAudio = useRef<HTMLAudioElement | null>(null);
@@ -466,6 +483,10 @@ export default function App() {
   }, [isWinsDirty, wins]);
 
   useEffect(() => {
+    if (!isWinsTargetInputFocused.current && !isWinsTargetDirty) setWinsTargetInput(String(winsTarget));
+  }, [isWinsTargetDirty, winsTarget]);
+
+  useEffect(() => {
     if (!isFirebaseConfigured) {
       return;
     }
@@ -490,9 +511,11 @@ export default function App() {
           setHasRemoteLegacyBoard(false);
           const localActivities = loadInitialActivities();
           const localWins = loadInitialWins();
+          const localWinsTarget = loadInitialWinsTarget();
           const localPayload = JSON.stringify({
             activities: localActivities,
             wins: localWins,
+            winsTarget: localWinsTarget,
           });
 
           if (!shouldSeedMissingFirebaseBoard) {
@@ -502,7 +525,7 @@ export default function App() {
           }
 
           lastRemotePayload.current = localPayload;
-          saveBoardData(localWins, localActivities)
+          saveBoardData(localWins, localWinsTarget, localActivities)
             .then(() => setSyncStatus("Synced with Firebase"))
             .catch(() => setSyncStatus("Firebase unavailable. Saving locally."));
           return;
@@ -515,6 +538,7 @@ export default function App() {
         const nextArchivedEntries = normalizeArchivedEntries(remoteData.archivedEntries);
         const nextBoard = normalizeBoard(remoteData.board);
         const nextWins = Number.isFinite(remoteData.wins) ? remoteData.wins : 104;
+        const nextWinsTarget = Number.isFinite(remoteData.winsTarget) ? remoteData.winsTarget : 0;
         if (!hasReceivedInitialWins.current) {
           previousWins.current = nextWins;
           hasReceivedInitialWins.current = true;
@@ -522,6 +546,7 @@ export default function App() {
         const remotePayload = JSON.stringify({
           activities: nextActivities,
           wins: nextWins,
+          winsTarget: nextWinsTarget,
         });
 
         if (pendingLocalPayload.current && remotePayload !== pendingLocalPayload.current) {
@@ -537,6 +562,7 @@ export default function App() {
         setArchivedEntries(nextArchivedEntries);
         setBoard(nextBoard);
         setWins(nextWins);
+        setWinsTarget(nextWinsTarget);
         setLastUpdatedAt(remoteData.updatedAt);
         setSyncStatus("Synced with Firebase");
       },
@@ -585,15 +611,19 @@ export default function App() {
   }, [wins]);
 
   useEffect(() => {
+    localStorage.setItem(WINS_TARGET_STORAGE_KEY, String(winsTarget));
+  }, [winsTarget]);
+
+  useEffect(() => {
     if (!isFirebaseConfigured || !hasRemoteLoaded.current || !canUserEdit(authUser)) return;
 
-    const payload = JSON.stringify({ activities, wins });
+    const payload = JSON.stringify({ activities, wins, winsTarget });
     if (payload === lastRemotePayload.current) return;
 
     pendingLocalPayload.current = payload;
     setSyncStatus("Saving to Firebase...");
     const saveTimer = window.setTimeout(() => {
-      saveBoardData(wins, activities)
+      saveBoardData(wins, winsTarget, activities)
         .then(() => {
           if (pendingLocalPayload.current !== payload) return;
 
@@ -609,7 +639,7 @@ export default function App() {
     }, 350);
 
     return () => window.clearTimeout(saveTimer);
-  }, [activities, authUser, wins]);
+  }, [activities, authUser, wins, winsTarget]);
 
   const totalEntries = useMemo(() => getTotalEntries(board), [board]);
   const canEditBoard = canUserEdit(authUser);
@@ -953,27 +983,116 @@ export default function App() {
       return;
     }
 
-    const payload = JSON.stringify({ activities, wins: normalizedWins });
+    const nextWinsTarget = normalizeWinsEditorValue(winsTargetInput, winsTarget);
+    const payload = JSON.stringify({
+      activities,
+      wins: normalizedWins,
+      winsTarget: nextWinsTarget,
+    });
     pendingLocalPayload.current = payload;
     setSyncStatus("Saving to Firebase...");
 
     try {
-      await saveBoardData(normalizedWins, activities);
-      lastRemotePayload.current = payload;
-      pendingLocalPayload.current = "";
+      await saveBoardData(normalizedWins, nextWinsTarget, activities);
+      if (pendingLocalPayload.current === payload) {
+        lastRemotePayload.current = payload;
+        pendingLocalPayload.current = "";
+        setSyncStatus("Synced with Firebase");
+      }
       setWins(normalizedWins);
       setWinsInput(String(normalizedWins));
       setIsWinsDirty(false);
       setWinsSaveMessage("Saved");
       setLastUpdatedAt(new Date().toISOString());
-      setSyncStatus("Synced with Firebase");
+
+      setWinsTarget(nextWinsTarget);
+      if (isWinsTargetDirty && winsTargetInput.trim() === String(nextWinsTarget)) {
+        setIsWinsTargetDirty(false);
+        setWinsTargetSaveMessage("Saved");
+      }
     } catch (error) {
       console.error("Total Wins save failed:", error);
-      pendingLocalPayload.current = "";
+      if (pendingLocalPayload.current === payload) {
+        pendingLocalPayload.current = "";
+        setSyncStatus("Firebase unavailable. Changes not saved.");
+      }
       setWinsSaveMessage("Save failed — try again");
-      setSyncStatus("Firebase unavailable. Changes not saved.");
     } finally {
       setIsSavingWins(false);
+    }
+  }
+
+  async function saveWinsTargetInput() {
+    if (isSavingWinsTarget || !isWinsTargetDirty) return;
+
+    const trimmedValue = winsTargetInput.trim();
+    if (!trimmedValue) {
+      setWinsTargetSaveMessage("Enter a target");
+      return;
+    }
+
+    const nextTarget = Number(trimmedValue);
+    if (!Number.isFinite(nextTarget)) {
+      setWinsTargetSaveMessage("Enter a valid number");
+      return;
+    }
+
+    const normalizedTarget = Math.max(0, Math.trunc(nextTarget));
+    if (normalizedTarget === winsTarget) {
+      setWinsTargetInput(String(winsTarget));
+      setIsWinsTargetDirty(false);
+      setWinsTargetSaveMessage("No changes to save");
+      return;
+    }
+
+    setIsSavingWinsTarget(true);
+    setWinsTargetSaveMessage("");
+
+    if (!isFirebaseConfigured) {
+      setWinsTarget(normalizedTarget);
+      setWinsTargetInput(String(normalizedTarget));
+      setIsWinsTargetDirty(false);
+      setWinsTargetSaveMessage("Saved locally");
+      setIsSavingWinsTarget(false);
+      return;
+    }
+
+    const nextWins = normalizeWinsEditorValue(winsInput, wins);
+    const payload = JSON.stringify({
+      activities,
+      wins: nextWins,
+      winsTarget: normalizedTarget,
+    });
+    pendingLocalPayload.current = payload;
+    setSyncStatus("Saving to Firebase...");
+
+    try {
+      await saveBoardData(nextWins, normalizedTarget, activities);
+      if (pendingLocalPayload.current === payload) {
+        lastRemotePayload.current = payload;
+        pendingLocalPayload.current = "";
+        setSyncStatus("Synced with Firebase");
+      }
+      setWinsTarget(normalizedTarget);
+      setWinsTargetInput(String(normalizedTarget));
+      setIsWinsTargetDirty(false);
+      setWinsTargetSaveMessage("Saved");
+      setLastUpdatedAt(new Date().toISOString());
+
+      setWins(nextWins);
+      if (isWinsDirty && winsInput.trim() === String(nextWins)) {
+        setIsWinsDirty(false);
+        setWinsSaveMessage("Saved");
+      }
+    } catch (error) {
+      console.error("Win target save failed:", error);
+      if (pendingLocalPayload.current === payload) {
+        pendingLocalPayload.current = "";
+        setSyncStatus("Firebase unavailable. Changes not saved.");
+      }
+      setWinsTargetSaveMessage("Save failed — try again");
+    } finally {
+      setIsSavingWinsTarget(false);
     }
   }
 
@@ -1125,7 +1244,7 @@ export default function App() {
   }
 
   return (
-    <main className={`app-shell ${page === "tv" && announcement ? "has-announcement" : ""}`}>
+    <main className={`app-shell ${page === "tv" ? "tv-page" : ""} ${page === "tv" && announcement ? "has-announcement" : ""}`}>
       {page === "tv" && isCelebrationActive ? <CanvasFireworks /> : null}
       {page === "tv" && announcement ? (
         <div className="announcement-banner" role="status" aria-label="Announcement">
@@ -1205,21 +1324,28 @@ export default function App() {
                 <span>Active Entries</span>
                 <strong>{totalEntries}</strong>
               </div>
-              <h1 className="wins-title">
-                TOTAL WINS:{" "}
-                <span
-                  className={`wins-celebration ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}
-                  key={winsAnimation?.id ?? "wins-idle"}
-                >
-                  <span className="wins-number">{wins}</span>
-                  {winsAnimation?.direction === "increase" ? (
-                    <span className="wins-delta">+{winsAnimation.delta} {winsAnimation.delta === 1 ? "WIN" : "WINS"}</span>
-                  ) : null}
-                  <span className="win-sparkle sparkle-one" aria-hidden="true">✦</span>
-                  <span className="win-sparkle sparkle-two" aria-hidden="true">✦</span>
-                  <span className="win-sparkle sparkle-three" aria-hidden="true">✦</span>
-                </span>
-              </h1>
+              <div className="wins-block">
+                {winsTarget > 0 ? (
+                  <div className="wins-target">
+                    Target <strong>{winsTarget}</strong>
+                  </div>
+                ) : null}
+                <h1 className="wins-title">
+                  TOTAL WINS:{" "}
+                  <span
+                    className={`wins-celebration ${winsAnimation ? `is-${winsAnimation.direction}` : ""}`}
+                    key={winsAnimation?.id ?? "wins-idle"}
+                  >
+                    <span className="wins-number">{wins}</span>
+                    {winsAnimation?.direction === "increase" ? (
+                      <span className="wins-delta">+{winsAnimation.delta} {winsAnimation.delta === 1 ? "WIN" : "WINS"}</span>
+                    ) : null}
+                    <span className="win-sparkle sparkle-one" aria-hidden="true">✦</span>
+                    <span className="win-sparkle sparkle-two" aria-hidden="true">✦</span>
+                    <span className="win-sparkle sparkle-three" aria-hidden="true">✦</span>
+                  </span>
+                </h1>
+              </div>
               <div className={`tv-live-status is-${tvConnection.state}`}>
                 <span aria-hidden="true" />
                 {tvConnection.label}
@@ -1342,6 +1468,55 @@ export default function App() {
                 {winsSaveMessage ? (
                   <span className={`wins-save-message ${winsSaveMessage.includes("failed") || winsSaveMessage.startsWith("Enter") ? "is-error" : ""}`}>
                     {winsSaveMessage}
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="wins-editor-controls">
+                <label className="wins-editor">
+                  <span>
+                    Win Target
+                    {isWinsTargetDirty ? <strong className="unsaved-indicator">Unsaved</strong> : null}
+                  </span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={winsTargetInput}
+                    onFocus={(event) => {
+                      isWinsTargetInputFocused.current = true;
+                      event.currentTarget.select();
+                    }}
+                    onChange={(event) => {
+                      setWinsTargetInput(event.target.value);
+                      setIsWinsTargetDirty(true);
+                      setWinsTargetSaveMessage("");
+                    }}
+                    onBlur={() => {
+                      isWinsTargetInputFocused.current = false;
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void saveWinsTargetInput();
+                      if (event.key === "Escape") {
+                        setWinsTargetInput(String(winsTarget));
+                        setIsWinsTargetDirty(false);
+                        setWinsTargetSaveMessage("");
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="primary-action-button save-wins-button"
+                  onClick={() => void saveWinsTargetInput()}
+                  disabled={!isWinsTargetDirty || isSavingWinsTarget}
+                >
+                  {isSavingWinsTarget ? "Saving…" : "Save"}
+                </button>
+                {winsTargetSaveMessage ? (
+                  <span className={`wins-save-message ${winsTargetSaveMessage.includes("failed") || winsTargetSaveMessage.startsWith("Enter") ? "is-error" : ""}`}>
+                    {winsTargetSaveMessage}
                   </span>
                 ) : null}
               </div>

@@ -28,6 +28,7 @@ type PersistedBoardData = {
   hasLegacyBoard: boolean;
   updatedAt: string | null;
   wins: number;
+  winsTarget: number;
 };
 
 type StoredRecord = BoardEntry & {
@@ -179,6 +180,7 @@ export function subscribeToBoard(
         hasLegacyBoard: true,
         updatedAt: (metadata.updatedAt as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? null,
         wins: typeof metadata.wins === "number" ? metadata.wins : 0,
+        winsTarget: typeof metadata.winsTarget === "number" ? metadata.winsTarget : 0,
       });
       return;
     }
@@ -206,6 +208,7 @@ export function subscribeToBoard(
       hasLegacyBoard: false,
       updatedAt: (metadata.updatedAt as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? null,
       wins: typeof metadata.wins === "number" ? metadata.wins : 0,
+      winsTarget: typeof metadata.winsTarget === "number" ? metadata.winsTarget : 0,
     });
   };
 
@@ -230,6 +233,7 @@ export function subscribeToBoard(
 
 export async function saveBoardData(
   wins: number,
+  winsTarget: number,
   activities: ActivityEntry[]
 ) {
   const boardDocRef = getBoardDocRef();
@@ -241,6 +245,7 @@ export async function saveBoardData(
       activities: cleanFirestoreData(activities),
       schemaVersion: 2,
       wins,
+      winsTarget,
       updatedAt: serverTimestamp(),
     },
     { merge: true }
