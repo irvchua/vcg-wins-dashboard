@@ -1473,7 +1473,7 @@ body,
 }
 
 .status-on-process { background: #11864e; }
-.status-for-checking { background: #e6b82a; }
+.status-under-qa-review { background: #e6b82a; }
 .status-appeals { background: #0b63b6; }
 .status-claims { background: #55a8dc; }
 
@@ -1545,7 +1545,7 @@ body,
 }
 
 .drag-row select[value="ON PROCESS"] { background-color: #11864e; color: white; }
-.drag-row select[value="FOR CHECKING"] { background-color: #ffe083; color: #3d2b00; }
+.drag-row select[value="UNDER QA REVIEW"] { background-color: #ffe083; color: #3d2b00; }
 .drag-row select[value="APPEALS"] { background-color: #0b63b6; color: white; }
 .drag-row select[value="CLAIMS"] { background-color: #b9e2ff; color: #0061a8; }
 

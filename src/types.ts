@@ -1,4 +1,4 @@
-export type StatusLabel = "" | "ON PROCESS" | "FOR CHECKING" | "APPEALS" | "CLAIMS";
+export type StatusLabel = "" | "ON PROCESS" | "UNDER QA REVIEW" | "APPEALS" | "CLAIMS";
 
 export type StageKey = "appeals" | "claims526" | "reviewSignature" | "faxing" | "faxed";
 
