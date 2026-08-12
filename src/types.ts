@@ -4,6 +4,7 @@ export type StageKey = "appeals" | "claims526" | "reviewSignature" | "faxing" | 
 
 export type BoardEntry = {
   id: number;
+  position?: number;
   name: string;
   assignedTo: string;
   adminInCharge: string;

@@ -199,6 +199,10 @@ export function subscribeToBoard(
         board[stage].push(entry);
       }
     });
+    Object.values(board).forEach((entries) => entries.sort(
+      (a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER)
+        || a.id - b.id
+    ));
 
     onData({
       announcement: typeof metadata.announcement === "string" ? metadata.announcement : "",
@@ -274,8 +278,9 @@ export async function migrateLegacyBoardRecords(board: BoardState, archivedEntri
 
   const batch = writeBatch(getFirestore(getFirebaseApp()!));
   Object.entries(board).forEach(([stage, entries]) => {
-    entries.forEach((entry) => batch.set(doc(recordsRef, String(entry.id)), cleanFirestoreData({
+    entries.forEach((entry, position) => batch.set(doc(recordsRef, String(entry.id)), cleanFirestoreData({
       ...entry,
+      position,
       isArchived: false,
       stage,
       updatedAt: entry.updatedAt ?? new Date().toISOString(),
@@ -292,6 +297,28 @@ export async function migrateLegacyBoardRecords(board: BoardState, archivedEntri
   batch.set(boardDocRef, { schemaVersion: 2, updatedAt: serverTimestamp() }, { merge: true });
   await batch.commit();
   return true;
+}
+
+export async function saveRecordPositions(
+  entries: Array<{ id: number; position: number; stage: StageKey; version: number }>,
+  actor: string
+) {
+  const app = getFirebaseApp();
+  if (!app || !entries.length) return;
+
+  const batch = writeBatch(getFirestore(app));
+  entries.forEach(({ id, position, stage, version }) => {
+    const recordRef = getRecordDocRef(id);
+    if (!recordRef) return;
+    batch.set(recordRef, cleanFirestoreData({
+      position,
+      stage,
+      version,
+      updatedAt: new Date().toISOString(),
+      updatedBy: actor,
+    }), { merge: true });
+  });
+  await batch.commit();
 }
 
 export async function createBoardRecord(stage: StageKey, entry: BoardEntry, actor: string) {
