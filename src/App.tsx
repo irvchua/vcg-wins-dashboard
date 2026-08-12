@@ -73,7 +73,7 @@ const stageConfig: StageConfigItem[] = [
   { key: "faxed", title: "FAXED", metaTitle: "PROCESS" },
 ];
 
-const statusOptions: StatusLabel[] = ["", "ON PROCESS", "FOR CHECKING", "APPEALS", "CLAIMS"];
+const statusOptions: StatusLabel[] = ["", "ON PROCESS", "UNDER QA REVIEW", "APPEALS", "CLAIMS"];
 
 const defaultAddRecordDraft: AddRecordDraft = {
   adminInCharge: "",
@@ -98,7 +98,7 @@ const initialBoard: BoardState = {
   claims526: [
     { id: 10, name: "Douglas Kramer", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
     { id: 11, name: "Aurelio Cuervo", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 12, name: "Gary Watson", assignedTo: "", adminInCharge: "", status: "FOR CHECKING" },
+    { id: 12, name: "Gary Watson", assignedTo: "", adminInCharge: "", status: "UNDER QA REVIEW" },
     { id: 13, name: "Freddie Gonzales", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
     { id: 14, name: "Juan Ocampo", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
     { id: 15, name: "Elvis Thien", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
@@ -173,7 +173,7 @@ function getBadgeClass(status: StatusLabel): string {
   switch (status) {
     case "ON PROCESS":
       return "badge badge-green";
-    case "FOR CHECKING":
+    case "UNDER QA REVIEW":
       return "badge badge-yellow";
     case "APPEALS":
       return "badge badge-blue";
@@ -184,6 +184,11 @@ function getBadgeClass(status: StatusLabel): string {
   }
 }
 
+function normalizeStatus(status: unknown): StatusLabel {
+  if (status === "FOR CHECKING") return "UNDER QA REVIEW";
+  return statusOptions.includes(status as StatusLabel) ? (status as StatusLabel) : "";
+}
+
 function normalizeBoard(board: BoardState): BoardState {
   const normalizeEntry = (entry: Partial<BoardEntry>, position: number): BoardEntry => ({
     ...entry,
@@ -192,7 +197,7 @@ function normalizeBoard(board: BoardState): BoardState {
     name: entry.name ?? "",
     assignedTo: "",
     adminInCharge: entry.adminInCharge ?? entry.assignedTo ?? "",
-    status: entry.status ?? "",
+    status: normalizeStatus(entry.status),
     notes: (entry.notes ?? "").slice(0, NOTE_MAX_LENGTH),
     updatedAt: entry.updatedAt,
     updatedBy: entry.updatedBy,
@@ -217,7 +222,7 @@ function normalizeArchivedEntries(entries: Partial<ArchivedEntry>[] = []): Archi
     name: entry.name ?? "",
     assignedTo: "",
     adminInCharge: entry.adminInCharge ?? entry.assignedTo ?? "",
-    status: entry.status ?? "",
+    status: normalizeStatus(entry.status),
     notes: (entry.notes ?? "").slice(0, NOTE_MAX_LENGTH),
     updatedAt: entry.updatedAt,
     updatedBy: entry.updatedBy,
