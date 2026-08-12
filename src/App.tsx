@@ -10,6 +10,7 @@ import {
   saveAnnouncement,
   saveBoardRecord,
   saveBoardData,
+  saveRecordPositions,
   shouldSeedMissingFirebaseBoard,
   signInWithGoogle,
   signOutUser,
@@ -184,9 +185,10 @@ function getBadgeClass(status: StatusLabel): string {
 }
 
 function normalizeBoard(board: BoardState): BoardState {
-  const normalizeEntry = (entry: Partial<BoardEntry>): BoardEntry => ({
+  const normalizeEntry = (entry: Partial<BoardEntry>, position: number): BoardEntry => ({
     ...entry,
     id: entry.id ?? 0,
+    position: entry.position ?? position,
     name: entry.name ?? "",
     assignedTo: "",
     adminInCharge: entry.adminInCharge ?? entry.assignedTo ?? "",
@@ -789,6 +791,7 @@ export default function App() {
 
     const newEntry: BoardEntry = {
       id: createRecordId(),
+      position: board[addRecordDraft.stage].length,
       name,
       assignedTo: "",
       adminInCharge: addRecordDraft.adminInCharge.trim(),
@@ -863,26 +866,61 @@ export default function App() {
     logActivity("Restored record", entry.name);
   }
 
-  function moveEntry(fromStage: StageKey, toStage: StageKey, id: number) {
-    if (fromStage === toStage) return;
-
+  function moveEntry(fromStage: StageKey, toStage: StageKey, id: number, targetId?: number) {
     setBoard((current) => {
-      const entryToMove = current[fromStage].find((entry) => entry.id === id);
-      if (!entryToMove) return current;
+      const movedEntry = current[fromStage].find((entry) => entry.id === id);
+      if (!movedEntry || targetId === id) return current;
 
-      return {
-        ...current,
-        [fromStage]: current[fromStage].filter((entry) => entry.id !== id),
-        [toStage]: [...current[toStage], { ...entryToMove, updatedAt: new Date().toISOString() }],
-      };
+      const originalPosition = new Map<number, { stage: StageKey; position: number }>();
+      current[fromStage].forEach((entry) => originalPosition.set(entry.id, { stage: fromStage, position: entry.position ?? 0 }));
+      if (toStage !== fromStage) {
+        current[toStage].forEach((entry) => originalPosition.set(entry.id, { stage: toStage, position: entry.position ?? 0 }));
+      }
+
+      const sourceEntries = current[fromStage].filter((entry) => entry.id !== id);
+      const destinationEntries = fromStage === toStage
+        ? sourceEntries
+        : current[toStage].filter((entry) => entry.id !== id);
+      const targetIndex = targetId === undefined
+        ? destinationEntries.length
+        : destinationEntries.findIndex((entry) => entry.id === targetId);
+      const insertAt = targetIndex < 0 ? destinationEntries.length : targetIndex;
+      destinationEntries.splice(insertAt, 0, { ...movedEntry, updatedAt: new Date().toISOString() });
+
+      const applyPositions = (entries: BoardEntry[], stage: StageKey) =>
+        entries.map((entry, position) => {
+          const original = originalPosition.get(entry.id);
+          const changed = !original || original.stage !== stage || original.position !== position;
+          return changed ? { ...entry, position, version: (entry.version ?? 1) + 1 } : { ...entry, position };
+        });
+
+      const nextFromStage = applyPositions(fromStage === toStage ? destinationEntries : sourceEntries, fromStage);
+      const nextToStage = applyPositions(destinationEntries, toStage);
+      const nextByStage = { [fromStage]: nextFromStage, [toStage]: nextToStage };
+
+      const affectedStages = fromStage === toStage ? [toStage] : [fromStage, toStage];
+      const positionUpdates = affectedStages.flatMap((stage) =>
+        nextByStage[stage]
+          .filter((entry) => {
+            const original = originalPosition.get(entry.id);
+            return !original || original.stage !== stage || original.position !== entry.position;
+          })
+          .map((entry) => ({ id: entry.id, position: entry.position ?? 0, stage, version: entry.version ?? 1 }))
+      );
+      if (positionUpdates.length) {
+        saveRecordPositions(positionUpdates, authUser?.email ?? "Local user")
+          .catch((error) => setSyncStatus(`Reorder failed: ${error.message}`));
+      }
+
+      if (fromStage !== toStage) {
+        const destination = stageConfig.find((stage) => stage.key === toStage)?.title ?? toStage;
+        logActivity(`Moved to ${destination}`, movedEntry.name);
+      } else {
+        logActivity("Reordered record", movedEntry.name);
+      }
+
+      return { ...current, [fromStage]: nextFromStage, [toStage]: nextToStage };
     });
-    const movedEntry = board[fromStage].find((entry) => entry.id === id);
-    if (movedEntry) {
-      updateRecordState(movedEntry, { stage: toStage }, authUser?.email ?? "Local user")
-        .catch((error) => setSyncStatus(`Move failed: ${error.message}`));
-      const destination = stageConfig.find((stage) => stage.key === toStage)?.title ?? toStage;
-      logActivity(`Moved to ${destination}`, movedEntry.name);
-    }
   }
 
   function clearFaxedBoard() {
@@ -1384,7 +1422,7 @@ export default function App() {
           <div className="admin-header">
             <div className="admin-title-block">
               <h1>Edit Wins Board</h1>
-              <p>Drag rows between columns, update statuses, and assign who is in charge.</p>
+              <p>Drag rows within or between columns, update statuses, and assign who is in charge.</p>
               <div className="status-row">
                 <div className="sync-status">{syncStatus}</div>
                 {lastUpdatedAt ? (
@@ -1870,7 +1908,7 @@ export default function App() {
 
                 <div className="drag-list">
                   {displayedBoard[stage.key].length ? (
-                    displayedBoard[stage.key].map((entry) => (
+                    displayedBoard[stage.key].map((entry, entryIndex) => (
                     <div
                       className="drag-row"
                       key={entry.id}
@@ -1878,6 +1916,16 @@ export default function App() {
                       onDragStart={(event) => {
                         event.dataTransfer.setData("entryId", String(entry.id));
                         event.dataTransfer.setData("fromStage", stage.key);
+                      }}
+                      onDragOver={(event) => {
+                        if (sortBy === "manual") event.preventDefault();
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const entryId = Number(event.dataTransfer.getData("entryId"));
+                        const fromStage = event.dataTransfer.getData("fromStage") as StageKey;
+                        moveEntry(fromStage, stage.key, entryId, entry.id);
                       }}
                     >
                       <div className="drag-handle">⋮⋮</div>
@@ -1890,6 +1938,23 @@ export default function App() {
                         <span>{entry.name || "Unnamed record"}</span>
                         <span className="edit-entry-icon" aria-hidden="true">✎</span>
                       </button>
+                      <div className="row-order-actions" aria-label={`Reorder ${entry.name}`}>
+                        <button
+                          type="button"
+                          aria-label={`Move ${entry.name} up`}
+                          disabled={sortBy !== "manual" || entryIndex === 0}
+                          onClick={() => moveEntry(stage.key, stage.key, entry.id, displayedBoard[stage.key][entryIndex - 1]?.id)}
+                        >↑</button>
+                        <button
+                          type="button"
+                          aria-label={`Move ${entry.name} down`}
+                          disabled={sortBy !== "manual" || entryIndex === displayedBoard[stage.key].length - 1}
+                          onClick={() => {
+                            const afterNext = displayedBoard[stage.key][entryIndex + 2]?.id;
+                            moveEntry(stage.key, stage.key, entry.id, afterNext);
+                          }}
+                        >↓</button>
+                      </div>
                     </div>
                     ))
                   ) : (

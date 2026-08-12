@@ -1389,8 +1389,8 @@ body,
 
 .drag-row {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  grid-template-areas: "handle name";
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-areas: "handle name order";
   gap: 10px;
   align-items: center;
   min-height: 52px;
@@ -1400,6 +1400,30 @@ body,
   color: #111;
   box-shadow: 0 10px 24px rgba(0,0,0,.16);
   cursor: grab;
+}
+
+.row-order-actions {
+  grid-area: order;
+  display: grid;
+  gap: 3px;
+}
+
+.row-order-actions button {
+  width: 24px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, .14);
+  border-radius: 6px;
+  background: #f3f5f7;
+  color: #203247;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.row-order-actions button:disabled {
+  opacity: .28;
+  cursor: default;
 }
 
 .drag-row:active {
@@ -1686,6 +1710,14 @@ body,
 
   .drag-row {
     grid-template-columns: 16px minmax(0, 1fr);
+    grid-template-areas:
+      "handle name"
+      "handle order";
+  }
+
+  .row-order-actions {
+    grid-auto-flow: column;
+    justify-content: start;
   }
 
   .drag-row select,
