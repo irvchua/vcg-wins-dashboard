@@ -151,6 +151,27 @@ function formatRelativeUpdated(timestamp: string, now: Date): string {
   return `${Math.floor(elapsedHours / 24)}d ago`;
 }
 
+function formatColumnDuration(timestamp: string, now: Date): string {
+  const elapsedSeconds = Math.max(0, Math.floor((now.getTime() - new Date(timestamp).getTime()) / 1000));
+  if (elapsedSeconds < 60) return "Just moved";
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `${elapsedMinutes}m`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `${elapsedHours}h`;
+  return `${Math.floor(elapsedHours / 24)}d`;
+}
+
+function formatUpdaterName(updatedBy: string): string {
+  if (!updatedBy.includes("@")) return updatedBy;
+
+  return updatedBy
+    .split("@")[0]
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function getTotalEntries(board: BoardState): number {
   return Object.values(board).reduce((sum, group) => sum + group.length, 0);
 }
@@ -708,13 +729,14 @@ export default function App() {
       : syncStatus.includes("Connecting") || syncStatus.includes("Saving")
         ? { label: "Connecting", state: "connecting" }
         : { label: "Offline", state: "offline" };
+  const updaterName = authUser?.name.trim() || "Local user";
 
   function logActivity(action: string, recordName?: string) {
     setActivities((current) => [
       {
         id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         action,
-        actor: authUser?.email ?? "Local user",
+        actor: updaterName,
         createdAt: new Date().toISOString(),
         recordName,
       },
@@ -751,11 +773,14 @@ export default function App() {
     setEditConflict("");
     try {
       const { stage, ...entry } = editRecordDraft;
+      const entryToSave = stage === selectedEntry.stage
+        ? entry
+        : { ...entry, stageEnteredAt: new Date().toISOString() };
       const savedEntry = await saveBoardRecord(
         stage,
-        entry,
+        entryToSave,
         selectedEntryInitial.version ?? 1,
-        authUser?.email ?? "Local user"
+        updaterName
       );
       setBoard((current) => ({
         ...current,
@@ -802,15 +827,16 @@ export default function App() {
       adminInCharge: addRecordDraft.adminInCharge.trim(),
       status: addRecordDraft.status,
       notes: addRecordDraft.notes.trim(),
+      stageEnteredAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      updatedBy: authUser?.email ?? "Local user",
+      updatedBy: updaterName,
       version: 1,
     };
     setBoard((current) => ({
       ...current,
       [addRecordDraft.stage]: [...current[addRecordDraft.stage], newEntry],
     }));
-    createBoardRecord(addRecordDraft.stage, newEntry, authUser?.email ?? "Local user")
+    createBoardRecord(addRecordDraft.stage, newEntry, updaterName)
       .catch((error) => setSyncStatus(`Record save failed: ${error.message}`));
 
     logActivity("Added record", name);
@@ -839,7 +865,7 @@ export default function App() {
       archivedFrom: stage,
       isArchived: true,
       stage,
-    }, authUser?.email ?? "Local user").catch((error) => setSyncStatus(`Archive failed: ${error.message}`));
+    }, updaterName).catch((error) => setSyncStatus(`Archive failed: ${error.message}`));
     logActivity("Archived record", entry.name);
   }
 
@@ -854,15 +880,16 @@ export default function App() {
       adminInCharge: entry.adminInCharge,
       status: entry.status,
       notes: entry.notes,
+      stageEnteredAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      updatedBy: authUser?.email ?? "Local user",
+      updatedBy: updaterName,
       version: (entry.version ?? 1) + 1,
     };
     setBoard((current) => ({
       ...current,
       [entry.archivedFrom]: [...current[entry.archivedFrom], restoredEntry],
     }));
-    updateRecordState(entry, { isArchived: false, stage: entry.archivedFrom }, authUser?.email ?? "Local user")
+    updateRecordState(entry, { isArchived: false, stage: entry.archivedFrom }, updaterName)
       .catch((error) => setSyncStatus(`Restore failed: ${error.message}`));
 
     setArchivedEntries((current) =>
@@ -890,7 +917,9 @@ export default function App() {
         ? destinationEntries.length
         : destinationEntries.findIndex((entry) => entry.id === targetId);
       const insertAt = targetIndex < 0 ? destinationEntries.length : targetIndex;
-      destinationEntries.splice(insertAt, 0, { ...movedEntry, updatedAt: new Date().toISOString() });
+      destinationEntries.splice(insertAt, 0, fromStage === toStage
+        ? movedEntry
+        : { ...movedEntry, stageEnteredAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
 
       const applyPositions = (entries: BoardEntry[], stage: StageKey) =>
         entries.map((entry, position) => {
@@ -910,10 +939,16 @@ export default function App() {
             const original = originalPosition.get(entry.id);
             return !original || original.stage !== stage || original.position !== entry.position;
           })
-          .map((entry) => ({ id: entry.id, position: entry.position ?? 0, stage, version: entry.version ?? 1 }))
+          .map((entry) => ({
+            id: entry.id,
+            position: entry.position ?? 0,
+            stage,
+            stageEnteredAt: entry.stageEnteredAt,
+            version: entry.version ?? 1,
+          }))
       );
       if (positionUpdates.length) {
-        saveRecordPositions(positionUpdates, authUser?.email ?? "Local user")
+        saveRecordPositions(positionUpdates, updaterName, fromStage === toStage)
           .catch((error) => setSyncStatus(`Reorder failed: ${error.message}`));
       }
 
@@ -942,7 +977,7 @@ export default function App() {
           archivedFrom: "faxed",
           isArchived: true,
           stage: "faxed",
-        }, authUser?.email ?? "Local user"))).catch((error) => setSyncStatus(`Clear Faxed failed: ${error.message}`));
+        }, updaterName))).catch((error) => setSyncStatus(`Clear Faxed failed: ${error.message}`));
         logActivity(`Cleared ${board.faxed.length} Faxed records`);
       },
     });
@@ -969,7 +1004,7 @@ export default function App() {
           archivedFrom: stage,
           isArchived: true,
           stage,
-        }, authUser?.email ?? "Local user"))).catch((error) => setSyncStatus(`Reset failed: ${error.message}`));
+        }, updaterName))).catch((error) => setSyncStatus(`Reset failed: ${error.message}`));
         logActivity(`Reset board and archived ${totalEntries} records`);
       },
     });
@@ -2162,7 +2197,7 @@ function BoardTable({ board, now }: { board: BoardState; now: Date }) {
               <span className="stage-count">{entries.length}</span>
             </div>
 
-            <AutoScrollingStageList entries={entries} now={now} stageIndex={stageIndex} />
+            <AutoScrollingStageList entries={entries} now={now} stageIndex={stageIndex} stageTitle={stage.title} />
           </section>
         );
       })}
@@ -2174,10 +2209,12 @@ function AutoScrollingStageList({
   entries,
   now,
   stageIndex,
+  stageTitle,
 }: {
   entries: BoardEntry[];
   now: Date;
   stageIndex: number;
+  stageTitle: string;
 }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -2281,13 +2318,26 @@ function AutoScrollingStageList({
                   {entry.notes}
                 </span>
               ) : null}
-              {entry.updatedAt ? (
-                <span className="person-updated" title={new Date(entry.updatedAt).toLocaleString()}>
-                  Updated {formatRelativeUpdated(entry.updatedAt, now)}
-                </span>
-              ) : null}
             </div>
             <span className={getBadgeClass(entry.status)}>{entry.status || " "}</span>
+            {entry.updatedAt ? (
+              <span className="person-metadata-rotator">
+                <span className="person-metadata-track">
+                  <span
+                    className="person-updated"
+                    title={`${new Date(entry.updatedAt).toLocaleString()}${entry.updatedBy ? ` by ${formatUpdaterName(entry.updatedBy)}` : ""}`}
+                  >
+                    Updated {formatRelativeUpdated(entry.updatedAt, now)}
+                    {entry.updatedBy ? ` by ${formatUpdaterName(entry.updatedBy)}` : ""}
+                  </span>
+                  <span className="person-updated">
+                    {formatColumnDuration(entry.stageEnteredAt ?? entry.updatedAt, now) === "Just moved"
+                      ? `Just moved to ${stageTitle}`
+                      : `In ${stageTitle} for ${formatColumnDuration(entry.stageEnteredAt ?? entry.updatedAt, now)}`}
+                  </span>
+                </span>
+              </span>
+            ) : null}
           </div>
         )) : <div className="stage-row empty-row" aria-hidden="true" />}
       </div>
