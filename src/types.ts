@@ -10,6 +10,7 @@ export type BoardEntry = {
   adminInCharge: string;
   status: StatusLabel;
   notes?: string;
+  stageEnteredAt?: string;
   updatedAt?: string;
   updatedBy?: string;
   version?: number;

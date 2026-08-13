@@ -116,10 +116,17 @@ function getAuthInstance() {
 function toAuthUser(user: User | null): AuthUser | null {
   if (!user?.email) return null;
 
+  const fallbackName = user.email
+    .split("@")[0]
+    .split(/[._-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+
   return {
     id: user.uid,
     email: user.email,
-    name: user.displayName ?? user.email,
+    name: user.displayName?.trim() || fallbackName || "Team member",
   };
 }
 
@@ -300,22 +307,24 @@ export async function migrateLegacyBoardRecords(board: BoardState, archivedEntri
 }
 
 export async function saveRecordPositions(
-  entries: Array<{ id: number; position: number; stage: StageKey; version: number }>,
-  actor: string
+  entries: Array<{ id: number; position: number; stage: StageKey; stageEnteredAt?: string; version: number }>,
+  actor: string,
+  preserveUpdateMetadata = false
 ) {
   const app = getFirebaseApp();
   if (!app || !entries.length) return;
 
   const batch = writeBatch(getFirestore(app));
-  entries.forEach(({ id, position, stage, version }) => {
+  entries.forEach(({ id, position, stage, stageEnteredAt, version }) => {
     const recordRef = getRecordDocRef(id);
     if (!recordRef) return;
     batch.set(recordRef, cleanFirestoreData({
       position,
       stage,
+      stageEnteredAt,
       version,
-      updatedAt: new Date().toISOString(),
-      updatedBy: actor,
+      updatedAt: preserveUpdateMetadata ? undefined : new Date().toISOString(),
+      updatedBy: preserveUpdateMetadata ? undefined : actor,
     }), { merge: true });
   });
   await batch.commit();
