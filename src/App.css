@@ -1260,6 +1260,8 @@ body,
   width: 50%;
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: rgba(0, 0, 0, .42);
   font-size: clamp(7px, .62vw, 10px);
   font-weight: 800;
