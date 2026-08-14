@@ -4,6 +4,7 @@ import {
   canUserEdit,
   createBoardRecord,
   type AuthUser,
+  isDemoMode,
   isFirebaseConfigured,
   migrateLegacyBoardRecords,
   RecordConflictError,
@@ -42,11 +43,12 @@ type WinsAnimation = {
   id: number;
 };
 
-const STORAGE_KEY = "vcg-wins-board-data";
-const ARCHIVED_STORAGE_KEY = "vcg-wins-board-archive";
-const WINS_STORAGE_KEY = "vcg-total-wins";
-const WINS_TARGET_STORAGE_KEY = "vcg-wins-target";
-const ACTIVITY_STORAGE_KEY = "vcg-wins-board-activity";
+const STORAGE_NAMESPACE = isDemoMode ? "vcg-demo" : "vcg";
+const STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-board-data`;
+const ARCHIVED_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-board-archive`;
+const WINS_STORAGE_KEY = `${STORAGE_NAMESPACE}-total-wins`;
+const WINS_TARGET_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-target`;
+const ACTIVITY_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-board-activity`;
 const NOTE_MAX_LENGTH = 80;
 const CELEBRATION_VISUAL_DURATION_MS = 33_000;
 const ANNOUNCEMENT_EDITOR_EMAILS = [
@@ -132,6 +134,45 @@ const initialBoard: BoardState = {
     { id: 39, name: "Elijah Stroh", assignedTo: "", adminInCharge: "", status: "" },
   ],
 };
+
+function createDemoBoard(): BoardState {
+  const timestamp = (daysAgo: number) =>
+    new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+  const entry = (
+    id: number,
+    name: string,
+    adminInCharge: string,
+    status: StatusLabel,
+    daysAgo: number
+  ): BoardEntry => ({
+    id,
+    name,
+    assignedTo: "",
+    adminInCharge,
+    status,
+    stageEnteredAt: timestamp(daysAgo),
+    updatedAt: timestamp(daysAgo),
+    updatedBy: "Demo User",
+    version: 1,
+  });
+
+  return {
+    appeals: [
+      entry(9001, "Demo Veteran Alpha", "Alex Admin", "ON PROCESS", 5),
+      entry(9002, "Demo Veteran Bravo", "Bailey Admin", "UNDER QA REVIEW", 2),
+    ],
+    claims526: [
+      entry(9003, "Demo Veteran Charlie", "Casey Admin", "ON PROCESS", 4),
+      entry(9004, "Demo Veteran Delta", "Alex Admin", "", 1),
+    ],
+    reviewSignature: [entry(9005, "Demo Veteran Echo", "Bailey Admin", "CLAIMS", 3)],
+    faxing: [entry(9006, "Demo Veteran Foxtrot", "Casey Admin", "APPEALS", 2)],
+    faxed: [
+      entry(9007, "Demo Veteran Golf", "Alex Admin", "CLAIMS", 7),
+      entry(9008, "Demo Veteran Hotel", "Bailey Admin", "APPEALS", 6),
+    ],
+  };
+}
 
 function formatTime(date: Date): string {
   return new Intl.DateTimeFormat("en-US", {
@@ -252,11 +293,12 @@ function normalizeArchivedEntries(entries: Partial<ArchivedEntry>[] = []): Archi
 }
 
 function loadInitialBoard(): BoardState {
+  const fallbackBoard = isDemoMode ? createDemoBoard() : initialBoard;
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? normalizeBoard(JSON.parse(saved)) : initialBoard;
+    return saved ? normalizeBoard(JSON.parse(saved)) : fallbackBoard;
   } catch {
-    return initialBoard;
+    return fallbackBoard;
   }
 }
 
@@ -271,7 +313,7 @@ function loadInitialArchivedEntries(): ArchivedEntry[] {
 
 function loadInitialWins(): number {
   const savedWins = localStorage.getItem(WINS_STORAGE_KEY);
-  return savedWins ? Number(savedWins) : 104;
+  return savedWins ? Number(savedWins) : isDemoMode ? 8 : 104;
 }
 
 function loadInitialWinsTarget(): number {
@@ -350,7 +392,7 @@ export default function App() {
   const [hasRemoteLegacyBoard, setHasRemoteLegacyBoard] = useState(false);
   const [authError, setAuthError] = useState("");
   const [syncStatus, setSyncStatus] = useState(
-    isFirebaseConfigured ? "Connecting to Firebase..." : "Local backup only"
+    isDemoMode ? "Demo mode - local data only" : isFirebaseConfigured ? "Connecting to Firebase..." : "Local backup only"
   );
   const hasRemoteLoaded = useRef(!isFirebaseConfigured);
   const lastRemotePayload = useRef("");
@@ -571,6 +613,14 @@ export default function App() {
           previousWins.current = nextWins;
           hasReceivedInitialWins.current = true;
         }
+
+        // Board/archive data is independent of the wins/activities save-in-flight guard
+        // below, so another editor's record changes are never dropped while this client
+        // has a pending Total Wins / Win Target / activity save.
+        setArchivedEntries(nextArchivedEntries);
+        setBoard(nextBoard);
+        setLastUpdatedAt(remoteData.updatedAt);
+
         const remotePayload = JSON.stringify({
           activities: nextActivities,
           wins: nextWins,
@@ -587,11 +637,8 @@ export default function App() {
 
         lastRemotePayload.current = remotePayload;
         setActivities(nextActivities);
-        setArchivedEntries(nextArchivedEntries);
-        setBoard(nextBoard);
         setWins(nextWins);
         setWinsTarget(nextWinsTarget);
-        setLastUpdatedAt(remoteData.updatedAt);
         setSyncStatus("Synced with Firebase");
       },
       (error) => {
@@ -775,7 +822,7 @@ export default function App() {
       const { stage, ...entry } = editRecordDraft;
       const entryToSave = stage === selectedEntry.stage
         ? entry
-        : { ...entry, stageEnteredAt: new Date().toISOString() };
+        : { ...entry, position: board[stage].length, stageEnteredAt: new Date().toISOString() };
       const savedEntry = await saveBoardRecord(
         stage,
         entryToSave,
@@ -873,6 +920,7 @@ export default function App() {
     const entry = archivedEntries.find((entry) => entry.id === id && entry.archivedAt === archivedAt);
     if (!entry) return;
 
+    const position = board[entry.archivedFrom].length;
     const restoredEntry: BoardEntry = {
       id: entry.id,
       name: entry.name,
@@ -880,6 +928,7 @@ export default function App() {
       adminInCharge: entry.adminInCharge,
       status: entry.status,
       notes: entry.notes,
+      position,
       stageEnteredAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       updatedBy: updaterName,
@@ -889,7 +938,7 @@ export default function App() {
       ...current,
       [entry.archivedFrom]: [...current[entry.archivedFrom], restoredEntry],
     }));
-    updateRecordState(entry, { isArchived: false, stage: entry.archivedFrom }, updaterName)
+    updateRecordState(entry, { isArchived: false, position, stage: entry.archivedFrom }, updaterName)
       .catch((error) => setSyncStatus(`Restore failed: ${error.message}`));
 
     setArchivedEntries((current) =>
@@ -948,7 +997,11 @@ export default function App() {
           }))
       );
       if (positionUpdates.length) {
-        saveRecordPositions(positionUpdates, updaterName, fromStage === toStage)
+        saveRecordPositions(
+          positionUpdates,
+          updaterName,
+          fromStage === toStage ? undefined : movedEntry.id
+        )
           .catch((error) => setSyncStatus(`Reorder failed: ${error.message}`));
       }
 
