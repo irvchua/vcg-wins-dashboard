@@ -61,11 +61,13 @@ const firebaseConfig = {
 };
 
 export const firebaseBoardId = import.meta.env.VITE_FIREBASE_BOARD_ID;
+export const isDemoMode = import.meta.env.VITE_DEMO_MODE === "true";
 export const shouldSeedMissingFirebaseBoard =
   import.meta.env.VITE_FIREBASE_ALLOW_INITIAL_SEED === "true";
 export const authorizedDomains = ["jcmchcorp.com", "veteranschoiceglobal.com"];
 
-export const isFirebaseConfigured = Object.values(firebaseConfig).every(Boolean) && Boolean(firebaseBoardId);
+export const isFirebaseConfigured =
+  !isDemoMode && Object.values(firebaseConfig).every(Boolean) && Boolean(firebaseBoardId);
 
 function cleanFirestoreData<T>(value: T): T {
   if (Array.isArray(value)) {
@@ -309,7 +311,7 @@ export async function migrateLegacyBoardRecords(board: BoardState, archivedEntri
 export async function saveRecordPositions(
   entries: Array<{ id: number; position: number; stage: StageKey; stageEnteredAt?: string; version: number }>,
   actor: string,
-  preserveUpdateMetadata = false
+  updatedRecordId?: number
 ) {
   const app = getFirebaseApp();
   if (!app || !entries.length) return;
@@ -318,13 +320,14 @@ export async function saveRecordPositions(
   entries.forEach(({ id, position, stage, stageEnteredAt, version }) => {
     const recordRef = getRecordDocRef(id);
     if (!recordRef) return;
+    const shouldUpdateMetadata = id === updatedRecordId;
     batch.set(recordRef, cleanFirestoreData({
       position,
       stage,
       stageEnteredAt,
       version,
-      updatedAt: preserveUpdateMetadata ? undefined : new Date().toISOString(),
-      updatedBy: preserveUpdateMetadata ? undefined : actor,
+      updatedAt: shouldUpdateMetadata ? new Date().toISOString() : undefined,
+      updatedBy: shouldUpdateMetadata ? actor : undefined,
     }), { merge: true });
   });
   await batch.commit();

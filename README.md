@@ -2,6 +2,16 @@
 
 React + Vite board for tracking wins across workflow stages.
 
+## Local demo mode
+
+To test with fictional placeholder records and no Firebase access, create `.env.local` with:
+
+```txt
+VITE_DEMO_MODE=true
+```
+
+Demo mode disables Firebase initialization even when Firebase credentials are available. Its changes are saved only in the browser under separate demo-specific `localStorage` keys, so production data and the normal local backup are untouched. Set the value to `false` or remove `.env.local` to leave demo mode.
+
 ## Deploy to Vercel from GitHub
 
 1. Push this project to a GitHub repository.
