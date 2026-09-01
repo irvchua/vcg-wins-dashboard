@@ -1,6 +1,16 @@
-# VCG Wins Board
+# VCG Dashboard
 
-React + Vite board for tracking wins across workflow stages.
+React + Vite dashboard for internal VCG tools. Today it hosts two tools; more can be added as new routes.
+
+## Routes
+
+| Route | Tool |
+|---|---|
+| `/` | Dashboard — launcher tiles linking to each tool |
+| `/wins-board` | Progress Board — tracks wins across workflow stages (see below) |
+| `/tasks` | Task management (in progress) |
+
+**TV / kiosk displays:** point the office TV's browser directly at `/wins-board`, not `/` — the root path now shows the dashboard launcher instead of the board.
 
 ## Local demo mode
 
@@ -47,7 +57,7 @@ VITE_AUTHORIZED_DOMAINS=jcmchcorp.com,veteranschoiceglobal.com
 
 The TV board remains viewable. The Edit Board view requires Google sign-in when Firebase is configured. Individual email exceptions and other domains are not accepted.
 
-## Firebase persistence
+## Progress Board: Firebase persistence
 
 Board metadata is stored in `winsBoards/{boardId}` and each record is stored independently in the `winsBoards/{boardId}/records` subcollection. Existing single-document board data is migrated automatically the first time an approved editor opens the board after this version is deployed. It still writes a local backup to `localStorage`.
 
@@ -80,3 +90,21 @@ VITE_FIREBASE_ALLOW_INITIAL_SEED=true
 Leave this off in normal production and preview deployments.
 
 The included `firestore.rules` keeps board reads public for the TV display and restricts all writes to authenticated accounts from the approved company domains.
+
+## Tasks: Firebase persistence
+
+Task data is stored at `taskBoards/{boardId}/tasks/{taskId}`. Unlike the wins board, there is no public read — the whole `/tasks` route requires Google sign-in from an approved domain.
+
+Access is role-based, not just domain-based:
+
+- **Task administrators** can read and manage every task. `admin@veteranschoiceglobal.com` is the permanent bootstrap administrator. Additional administrators are granted by adding a document at `taskBoards/{boardId}/admins/{email}` (a `/task-access` admin page for this is planned but not built yet — see the project plan).
+- **Everyone else** can only read, create, and update tasks where `assignedToEmail` matches their own verified Google account email. They can create new tasks, but only assigned to themselves.
+- `firestore.rules` enforces this boundary server-side (`taskAdmin()` plus per-task `assignedToEmail` ownership checks) — the app's UI only reflects the same rule for convenience, it isn't the security boundary.
+
+Because Firestore security rules aren't filters, the client scopes its own query: administrators subscribe to the full `tasks` collection, everyone else subscribes with `where("assignedToEmail", "==", theirEmail)`.
+
+Set `VITE_FIREBASE_TASKS_BOARD_ID` the same way you set `VITE_FIREBASE_BOARD_ID` — a separate Firestore document id per environment (e.g. `main-tasks`, `preview-tasks`, `local-tasks`) so test deployments don't write to production task data. The app will not connect to the tasks board unless this variable is set explicitly.
+
+Task edits use the same version-checked Firestore transaction pattern as the wins board: a stale save (someone else edited the same task first) is rejected rather than silently overwritten.
+
+The parent task-board document's `updatedAt` value describes board configuration and initialization only. Task activity timestamps live on each task document; task mutations intentionally do not write the parent document because regular users are authorized only for their own task documents.

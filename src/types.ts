@@ -30,3 +30,24 @@ export type ActivityEntry = {
   createdAt: string;
   recordName?: string;
 };
+
+export type TaskStatus = "todo" | "inProgress" | "blocked" | "done";
+
+export type TaskPriority = "low" | "medium" | "high" | "urgent";
+
+export type TaskEntry = {
+  id: string;
+  title: string;
+  description?: string;
+  assignedTo: string;
+  assignedToEmail: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  dueDate?: string;
+  position?: number;
+  createdBy: string;
+  createdAt: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  version?: number;
+};
