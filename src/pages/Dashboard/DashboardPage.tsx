@@ -1,5 +1,8 @@
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import "./DashboardPage.css";
+import { subscribeToAuth, type AuthUser } from "../../lib/firebase/auth";
+import { isTasksFirebaseConfigured, subscribeToTaskAdminStatus } from "../../lib/firebase/tasks";
 
 type ToolTile = {
   description: string;
@@ -28,7 +31,42 @@ const tools: ToolTile[] = [
   },
 ];
 
+const taskAccessTile: ToolTile = {
+  name: "Manage Task Access",
+  description: "Grant or revoke task administrator access.",
+  to: "/task-access",
+};
+
 export default function DashboardPage() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [isTaskAdmin, setIsTaskAdmin] = useState(!isTasksFirebaseConfigured);
+
+  useEffect(() => {
+    if (!isTasksFirebaseConfigured) return;
+
+    const unsubscribe = subscribeToAuth((user) => {
+      setAuthUser(user);
+      setIsTaskAdmin(false);
+    });
+    return () => unsubscribe?.();
+  }, []);
+
+  useEffect(() => {
+    if (!isTasksFirebaseConfigured || !authUser) return;
+
+    const unsubscribe = subscribeToTaskAdminStatus(
+      authUser.email,
+      setIsTaskAdmin,
+      (error) => {
+        console.error("Task admin status check failed:", error);
+        setIsTaskAdmin(false);
+      }
+    );
+    return () => unsubscribe?.();
+  }, [authUser]);
+
+  const visibleTools = isTaskAdmin ? [...tools, taskAccessTile] : tools;
+
   return (
     <main className="dashboard-shell">
       <header className="dashboard-header">
@@ -37,7 +75,7 @@ export default function DashboardPage() {
       </header>
 
       <div className="dashboard-grid">
-        {tools.map((tool) => (
+        {visibleTools.map((tool) => (
           <Link
             key={tool.to}
             to={tool.to}

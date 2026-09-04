@@ -1,6 +1,6 @@
 # VCG Dashboard
 
-React + Vite dashboard for internal VCG tools. Today it hosts two tools; more can be added as new routes.
+React + Vite dashboard for internal VCG tools. More tools can be added as new routes.
 
 ## Routes
 
@@ -8,7 +8,8 @@ React + Vite dashboard for internal VCG tools. Today it hosts two tools; more ca
 |---|---|
 | `/` | Dashboard — launcher tiles linking to each tool |
 | `/wins-board` | Progress Board — tracks wins across workflow stages (see below) |
-| `/tasks` | Task management (in progress) |
+| `/tasks` | Task management — Kanban board, see "Tasks: Firebase persistence" below |
+| `/task-access` | Grant or revoke task administrator access. The dashboard tile is shown only to task administrators, and Firestore rules protect the underlying data and mutations |
 
 **TV / kiosk displays:** point the office TV's browser directly at `/wins-board`, not `/` — the root path now shows the dashboard launcher instead of the board.
 
@@ -97,7 +98,7 @@ Task data is stored at `taskBoards/{boardId}/tasks/{taskId}`. Unlike the wins bo
 
 Access is role-based, not just domain-based:
 
-- **Task administrators** can read and manage every task. `admin@veteranschoiceglobal.com` is the permanent bootstrap administrator. Additional administrators are granted by adding a document at `taskBoards/{boardId}/admins/{email}` (a `/task-access` admin page for this is planned but not built yet — see the project plan).
+- **Task administrators** can read and manage every task. `admin@veteranschoiceglobal.com` is the permanent bootstrap administrator. Additional administrators are stored as documents at `taskBoards/{boardId}/admins/{email}`, granted and revoked from `/task-access` by an existing administrator (the bootstrap administrator cannot be removed).
 - **Everyone else** can only read, create, and update tasks where `assignedToEmail` matches their own verified Google account email. They can create new tasks, but only assigned to themselves.
 - `firestore.rules` enforces this boundary server-side (`taskAdmin()` plus per-task `assignedToEmail` ownership checks) — the app's UI only reflects the same rule for convenience, it isn't the security boundary.
 

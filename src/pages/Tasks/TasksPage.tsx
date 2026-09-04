@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import "../../styles/shared.css";
 import "./TasksPage.css";
 import {
   canUserEdit,
