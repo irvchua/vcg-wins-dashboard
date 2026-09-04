@@ -9,7 +9,7 @@ import {
   serverTimestamp,
   setDoc,
   where,
-  writeBatch,
+  type DocumentReference,
 } from "firebase/firestore";
 import type { TaskEntry, TaskStatus } from "../../types";
 import { cleanFirestoreData, FirestoreConflictError as TaskConflictError, getFirebaseApp, isFirebaseAppConfigured } from "./auth";
@@ -211,20 +211,32 @@ export async function saveTaskPositions(
   const app = getFirebaseApp();
   if (!app || !entries.length) return;
 
-  const batch = writeBatch(getFirestore(app));
-  const updatedAt = new Date().toISOString();
-  entries.forEach(({ id, position, status, version }) => {
-    const taskRef = getTaskDocRef(id);
-    if (!taskRef) return;
-    batch.set(taskRef, cleanFirestoreData({
-      position,
-      status,
-      version: version + 1,
-      updatedAt,
-      updatedBy: actor,
-    }), { merge: true });
+  const refs: Array<{ entry: (typeof entries)[number]; ref: DocumentReference }> = [];
+  entries.forEach((entry) => {
+    const taskRef = getTaskDocRef(entry.id);
+    if (taskRef) refs.push({ entry, ref: taskRef });
   });
-  await batch.commit();
+  if (!refs.length) return;
+
+  const database = getFirestore(app);
+  const updatedAt = new Date().toISOString();
+  await runTransaction(database, async (transaction) => {
+    // All reads must happen before any writes in a Firestore transaction.
+    const snapshots = await Promise.all(refs.map(({ ref }) => transaction.get(ref)));
+
+    refs.forEach(({ entry, ref }, index) => {
+      // Skip tasks someone else deleted in the meantime instead of resurrecting a partial doc.
+      if (!snapshots[index].exists()) return;
+      transaction.set(ref, cleanFirestoreData({
+        position: entry.position,
+        status: entry.status,
+        version: entry.version + 1,
+        updatedAt,
+        updatedBy: actor,
+      }), { merge: true });
+    });
+  });
+
   return entries.map((entry) => ({
     ...entry,
     updatedAt,

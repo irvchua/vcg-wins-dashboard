@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import "./DashboardPage.css";
-import { subscribeToAuth, type AuthUser } from "../../lib/firebase/auth";
+import { canUserEdit, subscribeToAuth, type AuthUser } from "../../lib/firebase/auth";
 import { isTasksFirebaseConfigured, subscribeToTaskAdminStatus } from "../../lib/firebase/tasks";
 
 type ToolTile = {
@@ -52,7 +52,7 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (!isTasksFirebaseConfigured || !authUser) return;
+    if (!isTasksFirebaseConfigured || !authUser || !canUserEdit(authUser)) return;
 
     const unsubscribe = subscribeToTaskAdminStatus(
       authUser.email,
