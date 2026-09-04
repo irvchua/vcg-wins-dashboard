@@ -1,6 +1,17 @@
-# VCG Wins Board
+# VCG Dashboard
 
-React + Vite board for tracking wins across workflow stages.
+React + Vite dashboard for internal VCG tools. More tools can be added as new routes.
+
+## Routes
+
+| Route | Tool |
+|---|---|
+| `/` | Dashboard — launcher tiles linking to each tool |
+| `/wins-board` | Progress Board — tracks wins across workflow stages (see below) |
+| `/tasks` | Task management — Kanban board, see "Tasks: Firebase persistence" below |
+| `/task-access` | Grant or revoke task administrator access. The dashboard tile is shown only to task administrators, and Firestore rules protect the underlying data and mutations |
+
+**TV / kiosk displays:** point the office TV's browser directly at `/wins-board`, not `/` — the root path now shows the dashboard launcher instead of the board.
 
 ## Local demo mode
 
@@ -47,7 +58,7 @@ VITE_AUTHORIZED_DOMAINS=jcmchcorp.com,veteranschoiceglobal.com
 
 The TV board remains viewable. The Edit Board view requires Google sign-in when Firebase is configured. Individual email exceptions and other domains are not accepted.
 
-## Firebase persistence
+## Progress Board: Firebase persistence
 
 Board metadata is stored in `winsBoards/{boardId}` and each record is stored independently in the `winsBoards/{boardId}/records` subcollection. Existing single-document board data is migrated automatically the first time an approved editor opens the board after this version is deployed. It still writes a local backup to `localStorage`.
 
@@ -80,3 +91,23 @@ VITE_FIREBASE_ALLOW_INITIAL_SEED=true
 Leave this off in normal production and preview deployments.
 
 The included `firestore.rules` keeps board reads public for the TV display and restricts all writes to authenticated accounts from the approved company domains.
+
+## Tasks: Firebase persistence
+
+Task data is stored at `taskBoards/{boardId}/tasks/{taskId}`. Unlike the wins board, there is no public read — the whole `/tasks` route requires Google sign-in from an approved domain.
+
+Access is role-based, not just domain-based:
+
+- **Task administrators** can read and manage every task. `admin@veteranschoiceglobal.com` is the permanent bootstrap administrator. Additional administrators are stored as documents at `taskBoards/{boardId}/admins/{email}`, granted and revoked from `/task-access` by an existing administrator (the bootstrap administrator cannot be removed).
+- **Everyone else** can only read, create, and update tasks where `assignedToEmail` matches their own verified Google account email. They can create new tasks, but only assigned to themselves.
+- `firestore.rules` enforces this boundary server-side (`taskAdmin()` plus per-task `assignedToEmail` ownership checks) — the app's UI only reflects the same rule for convenience, it isn't the security boundary.
+
+Because Firestore security rules aren't filters, the client scopes its own query: administrators subscribe to the full `tasks` collection, everyone else subscribes with `where("assignedToEmail", "==", theirEmail)`.
+
+Approved users register a lightweight directory profile at `taskBoards/{boardId}/members/{uid}` as soon as they're signed in anywhere on the dashboard, not only on the Tasks page. Administrators use this Firestore-backed directory to select an assignee. The list contains users who have signed in at least once; it is not a complete export of Firebase Authentication users, so a teammate who has never signed into the site won't appear until they do.
+
+Set `VITE_FIREBASE_TASKS_BOARD_ID` the same way you set `VITE_FIREBASE_BOARD_ID` — a separate Firestore document id per environment (e.g. `main-tasks`, `preview-tasks`, `local-tasks`) so test deployments don't write to production task data. The app will not connect to the tasks board unless this variable is set explicitly.
+
+Task edits use the same version-checked Firestore transaction pattern as the wins board: a stale save (someone else edited the same task first) is rejected rather than silently overwritten.
+
+The parent task-board document's `updatedAt` value describes board configuration and initialization only. Task activity timestamps live on each task document; task mutations intentionally do not write the parent document because regular users are authorized only for their own task documents.

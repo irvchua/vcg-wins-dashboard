@@ -42,5 +42,39 @@ service cloud.firestore {
         allow write: if approvedEditor();
       }
     }
+
+    match /taskBoards/{boardId} {
+      function taskAdmin() {
+        return approvedEditor() && (
+          request.auth.token.email == 'admin@veteranschoiceglobal.com'
+          || exists(/databases/$(database)/documents/taskBoards/$(boardId)/admins/$(request.auth.token.email))
+        );
+      }
+
+      allow read, write: if taskAdmin();
+      match /tasks/{taskId} {
+        allow read: if taskAdmin()
+          || (approvedEditor() && resource.data.assignedToEmail == request.auth.token.email);
+        allow create: if taskAdmin()
+          || (approvedEditor() && request.resource.data.assignedToEmail == request.auth.token.email);
+        allow update: if taskAdmin()
+          || (approvedEditor()
+            && resource.data.assignedToEmail == request.auth.token.email
+            && request.resource.data.assignedToEmail == request.auth.token.email);
+        allow delete: if taskAdmin();
+      }
+      match /admins/{email} {
+        allow read: if taskAdmin();
+        allow create, update, delete: if taskAdmin()
+          && email != 'admin@veteranschoiceglobal.com';
+      }
+      match /members/{memberId} {
+        allow read: if taskAdmin()
+          || (approvedEditor() && memberId == request.auth.uid);
+        allow create, update: if approvedEditor()
+          && memberId == request.auth.uid
+          && request.resource.data.email == request.auth.token.email;
+      }
+    }
   }
 }
