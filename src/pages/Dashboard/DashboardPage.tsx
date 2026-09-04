@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import "./DashboardPage.css";
 import { canUserEdit, subscribeToAuth, type AuthUser } from "../../lib/firebase/auth";
-import { isTasksFirebaseConfigured, subscribeToTaskAdminStatus } from "../../lib/firebase/tasks";
+import { isTasksFirebaseConfigured, registerTaskMember, subscribeToTaskAdminStatus } from "../../lib/firebase/tasks";
 
 type ToolTile = {
   description: string;
@@ -47,6 +47,13 @@ export default function DashboardPage() {
     const unsubscribe = subscribeToAuth((user) => {
       setAuthUser(user);
       setIsTaskAdmin(false);
+      // Register anyone who's signed in anywhere on the dashboard as a task member, not just
+      // people who've specifically visited /tasks, so the assignee directory fills in sooner.
+      if (user && canUserEdit(user)) {
+        registerTaskMember(user).catch((error) => {
+          console.error("Task member registration failed:", error);
+        });
+      }
     });
     return () => unsubscribe?.();
   }, []);

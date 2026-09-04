@@ -104,6 +104,8 @@ Access is role-based, not just domain-based:
 
 Because Firestore security rules aren't filters, the client scopes its own query: administrators subscribe to the full `tasks` collection, everyone else subscribes with `where("assignedToEmail", "==", theirEmail)`.
 
+Approved users register a lightweight directory profile at `taskBoards/{boardId}/members/{uid}` as soon as they're signed in anywhere on the dashboard, not only on the Tasks page. Administrators use this Firestore-backed directory to select an assignee. The list contains users who have signed in at least once; it is not a complete export of Firebase Authentication users, so a teammate who has never signed into the site won't appear until they do.
+
 Set `VITE_FIREBASE_TASKS_BOARD_ID` the same way you set `VITE_FIREBASE_BOARD_ID` — a separate Firestore document id per environment (e.g. `main-tasks`, `preview-tasks`, `local-tasks`) so test deployments don't write to production task data. The app will not connect to the tasks board unless this variable is set explicitly.
 
 Task edits use the same version-checked Firestore transaction pattern as the wins board: a stale save (someone else edited the same task first) is rejected rather than silently overwritten.

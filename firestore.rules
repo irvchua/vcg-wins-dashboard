@@ -69,6 +69,13 @@ service cloud.firestore {
         allow create, update, delete: if taskAdmin()
           && email != 'admin@veteranschoiceglobal.com';
       }
+      match /members/{memberId} {
+        allow read: if taskAdmin()
+          || (approvedEditor() && memberId == request.auth.uid);
+        allow create, update: if approvedEditor()
+          && memberId == request.auth.uid
+          && request.resource.data.email == request.auth.token.email;
+      }
     }
   }
 }

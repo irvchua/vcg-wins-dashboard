@@ -14,12 +14,15 @@ import {
   deleteTask,
   initializeTaskBoard,
   isTasksFirebaseConfigured,
+  registerTaskMember,
   saveTask,
   saveTaskPositions,
   subscribeToTaskAdminStatus,
   subscribeToTaskBoard,
+  subscribeToTaskMembers,
   subscribeToTasks,
   TaskConflictError,
+  type TaskMember,
 } from "../../lib/firebase/tasks";
 import type { TaskEntry, TaskPriority, TaskStatus } from "../../types";
 
@@ -56,6 +59,11 @@ const priorityLabels: Record<TaskPriority, string> = {
 };
 
 const emptyTaskBoard: TaskBoardState = { todo: [], inProgress: [], blocked: [], done: [] };
+
+// Without Firebase, isTaskAdmin defaults to true (see the local-mode convention below) but the
+// real member directory can never populate, which would make the assignee dropdown permanently
+// empty. Seed a synthetic entry so local/offline testing stays usable.
+const localModeTaskMembers: TaskMember[] = [{ id: "local-user", email: "local@example.com", name: "Local user" }];
 
 const defaultAddTaskDraft: AddTaskDraft = {
   assignedTo: "",
@@ -109,6 +117,10 @@ export default function TasksPage() {
   const [isAdminStatusLoading, setIsAdminStatusLoading] = useState(isTasksFirebaseConfigured);
   const [taskBoard, setTaskBoard] = useState<TaskBoardState>(emptyTaskBoard);
   const [isBoardLoading, setIsBoardLoading] = useState(isTasksFirebaseConfigured);
+  const [taskMembers, setTaskMembers] = useState<TaskMember[]>(
+    isTasksFirebaseConfigured ? [] : localModeTaskMembers
+  );
+  const [memberDirectoryMessage, setMemberDirectoryMessage] = useState("");
   const [syncMessage, setSyncMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
@@ -133,11 +145,21 @@ export default function TasksPage() {
       const hasTaskAccess = Boolean(user && canUserEdit(user));
       setAuthUser(user);
       setTaskBoard(emptyTaskBoard);
+      setTaskMembers([]);
       setIsTaskAdmin(false);
       setIsAdminStatusLoading(hasTaskAccess);
       setIsBoardLoading(hasTaskAccess);
       setSyncMessage("");
+      setMemberDirectoryMessage("");
       setIsAuthLoading(false);
+      if (hasTaskAccess && user) {
+        registerTaskMember(user)
+          .then(() => setMemberDirectoryMessage(""))
+          .catch((error) => {
+            console.error("Task member registration failed:", error);
+            setMemberDirectoryMessage("Couldn't add you to the assignee directory. Try reloading the page.");
+          });
+      }
     });
     return () => unsubscribe?.();
   }, []);
@@ -149,6 +171,7 @@ export default function TasksPage() {
       authUser.email,
       (isAdmin) => {
         setTaskBoard(emptyTaskBoard);
+        setTaskMembers([]);
         setIsBoardLoading(true);
         setIsTaskAdmin(isAdmin);
         setIsAdminStatusLoading(false);
@@ -156,6 +179,7 @@ export default function TasksPage() {
       (error) => {
         console.error("Task admin status check failed:", error);
         setTaskBoard(emptyTaskBoard);
+        setTaskMembers([]);
         setIsBoardLoading(true);
         setIsTaskAdmin(false);
         setIsAdminStatusLoading(false);
@@ -184,6 +208,22 @@ export default function TasksPage() {
 
     return () => unsubscribe?.();
   }, [authUser, isAdminStatusLoading, isTaskAdmin]);
+
+  useEffect(() => {
+    if (!isTasksFirebaseConfigured || !isTaskAdmin) return;
+
+    const unsubscribe = subscribeToTaskMembers(
+      (members) => {
+        setTaskMembers(members);
+        setMemberDirectoryMessage("");
+      },
+      (error) => {
+        console.error("Task member directory sync failed:", error);
+        setMemberDirectoryMessage("The assignee directory is unavailable. Check your connection.");
+      }
+    );
+    return () => unsubscribe?.();
+  }, [isTaskAdmin]);
 
   useEffect(() => {
     if (!isTasksFirebaseConfigured || !isTaskAdmin || hasInitializedBoard.current) return;
@@ -297,7 +337,8 @@ export default function TasksPage() {
     setIsConfirmingDelete(false);
   }
 
-  async function closeEditTask() {
+  async function closeEditTask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     if (!selectedTaskId || !editTaskInitial || !editTaskDraft || isSavingTask) return;
 
     const hasChanges = (["title", "description", "assignedTo", "assignedToEmail", "priority", "status", "dueDate"] as const)
@@ -471,6 +512,7 @@ export default function TasksPage() {
           </div>
 
           {syncMessage ? <p className="tasks-sync-message" role="alert">{syncMessage}</p> : null}
+          {memberDirectoryMessage ? <p className="tasks-sync-message" role="alert">{memberDirectoryMessage}</p> : null}
 
           {isBoardLoading ? (
             <p className="tasks-loading">Loading tasks…</p>
@@ -584,22 +626,28 @@ export default function TasksPage() {
                     />
                   </label>
                   {isTaskAdmin ? (
-                    <div className="task-modal-row">
+                    <div className="task-modal-row task-modal-row-assignee">
                       <label className="modal-field">
-                        Assignee name
-                        <input
-                          value={addTaskDraft.assignedTo}
-                          onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, assignedTo: event.target.value }))}
-                        />
-                      </label>
-                      <label className="modal-field">
-                        Assignee email
-                        <input
-                          type="email"
+                        Assignee
+                        <select
                           required
                           value={addTaskDraft.assignedToEmail}
-                          onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, assignedToEmail: event.target.value }))}
-                        />
+                          onChange={(event) => {
+                            const member = taskMembers.find((candidate) => candidate.email === event.target.value);
+                            setAddTaskDraft((draft) => ({
+                              ...draft,
+                              assignedTo: member?.name || member?.email || "",
+                              assignedToEmail: member?.email || "",
+                            }));
+                          }}
+                        >
+                          <option value="">Select a user</option>
+                          {taskMembers.map((member) => (
+                            <option key={member.id} value={member.email}>
+                              {member.name ? `${member.name} (${member.email})` : member.email}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                     </div>
                   ) : (
@@ -657,120 +705,133 @@ export default function TasksPage() {
             <div className="modal-backdrop" role="presentation" onMouseDown={dismissEditTask}>
               <div className="task-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
                 <h2>Edit Task</h2>
-                <label className="modal-field">
-                  Title
-                  <input
-                    value={editTaskDraft.title}
-                    onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, title: event.target.value })}
-                  />
-                </label>
-                <label className="modal-field">
-                  Description
-                  <textarea
-                    value={editTaskDraft.description ?? ""}
-                    onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, description: event.target.value })}
-                  />
-                </label>
-                {isTaskAdmin ? (
-                  <div className="task-modal-row">
+                <form onSubmit={closeEditTask}>
+                  <label className="modal-field">
+                    Title
+                    <input
+                      value={editTaskDraft.title}
+                      onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, title: event.target.value })}
+                    />
+                  </label>
+                  <label className="modal-field">
+                    Description
+                    <textarea
+                      value={editTaskDraft.description ?? ""}
+                      onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, description: event.target.value })}
+                    />
+                  </label>
+                  {isTaskAdmin ? (
+                    <div className="task-modal-row task-modal-row-assignee">
+                      <label className="modal-field">
+                        Assignee
+                        <select
+                          required
+                          value={editTaskDraft.assignedToEmail}
+                          onChange={(event) => {
+                            const member = taskMembers.find((candidate) => candidate.email === event.target.value);
+                            setEditTaskDraft((draft) => draft && ({
+                              ...draft,
+                              assignedTo: member?.name || member?.email || "",
+                              assignedToEmail: member?.email || "",
+                            }));
+                          }}
+                        >
+                          {!editTaskDraft.assignedToEmail ? <option value="">Select a user</option> : null}
+                          {editTaskDraft.assignedToEmail && !taskMembers.some((member) => member.email === editTaskDraft.assignedToEmail) ? (
+                            <option value={editTaskDraft.assignedToEmail}>
+                              {editTaskDraft.assignedTo || editTaskDraft.assignedToEmail} ({editTaskDraft.assignedToEmail})
+                            </option>
+                          ) : null}
+                          {taskMembers.map((member) => (
+                            <option key={member.id} value={member.email}>
+                              {member.name ? `${member.name} (${member.email})` : member.email}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ) : (
                     <label className="modal-field">
-                      Assignee name
+                      Assignee
                       <input
                         value={editTaskDraft.assignedTo}
                         onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, assignedTo: event.target.value })}
                       />
+                      <span className="tasks-assignee-note">Assigned to you ({editTaskDraft.assignedToEmail})</span>
+                    </label>
+                  )}
+                  <div className="task-modal-row">
+                    <label className="modal-field">
+                      Priority
+                      <select
+                        value={editTaskDraft.priority}
+                        onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, priority: event.target.value as TaskPriority })}
+                      >
+                        {priorityOptions.map((priority) => (
+                          <option key={priority} value={priority}>{priorityLabels[priority]}</option>
+                        ))}
+                      </select>
                     </label>
                     <label className="modal-field">
-                      Assignee email
+                      Status
+                      <select
+                        value={editTaskDraft.status}
+                        onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, status: event.target.value as TaskStatus })}
+                      >
+                        {statusConfig.map((status) => (
+                          <option key={status.key} value={status.key}>{status.title}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="modal-field">
+                      Due date
                       <input
-                        type="email"
-                        required
-                        value={editTaskDraft.assignedToEmail}
-                        onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, assignedToEmail: event.target.value })}
+                        type="date"
+                        value={editTaskDraft.dueDate ?? ""}
+                        onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, dueDate: event.target.value })}
                       />
                     </label>
                   </div>
-                ) : (
-                  <label className="modal-field">
-                    Assignee
-                    <input
-                      value={editTaskDraft.assignedTo}
-                      onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, assignedTo: event.target.value })}
-                    />
-                    <span className="tasks-assignee-note">Assigned to you ({editTaskDraft.assignedToEmail})</span>
-                  </label>
-                )}
-                <div className="task-modal-row">
-                  <label className="modal-field">
-                    Priority
-                    <select
-                      value={editTaskDraft.priority}
-                      onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, priority: event.target.value as TaskPriority })}
-                    >
-                      {priorityOptions.map((priority) => (
-                        <option key={priority} value={priority}>{priorityLabels[priority]}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="modal-field">
-                    Status
-                    <select
-                      value={editTaskDraft.status}
-                      onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, status: event.target.value as TaskStatus })}
-                    >
-                      {statusConfig.map((status) => (
-                        <option key={status.key} value={status.key}>{status.title}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="modal-field">
-                    Due date
-                    <input
-                      type="date"
-                      value={editTaskDraft.dueDate ?? ""}
-                      onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, dueDate: event.target.value })}
-                    />
-                  </label>
-                </div>
 
-                <div className="record-modal-actions edit-modal-actions">
-                  {isConfirmingDelete ? (
-                    <>
-                      <span className="tasks-delete-confirm-label">Delete this task?</span>
-                      <button type="button" className="secondary-action-button" onClick={() => setIsConfirmingDelete(false)} disabled={isSavingTask}>
-                        Cancel
-                      </button>
-                      <button type="button" className="danger-confirm-button" onClick={handleDeleteTask} disabled={isSavingTask}>
-                        Confirm Delete
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" className="danger-confirm-button" onClick={() => setIsConfirmingDelete(true)} disabled={isSavingTask}>
-                        Delete
-                      </button>
-                      <span className="modal-save-status">{isSavingTask ? "Saving…" : "Changes are checked before saving"}</span>
-                      <button type="button" className="secondary-action-button" onClick={dismissEditTask} disabled={isSavingTask}>Cancel</button>
-                      <button type="button" className="primary-action-button" onClick={closeEditTask} disabled={isSavingTask}>
-                        {isSavingTask ? "Saving…" : "Save Changes"}
-                      </button>
-                    </>
-                  )}
-                </div>
-                {editConflict ? (
-                  <div className="edit-conflict" role="alert">
-                    <span>{editConflict}</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const latest = Object.values(taskBoard).flat().find((task) => task.id === selectedTaskId);
-                        if (latest) openEditTask(latest);
-                      }}
-                    >
-                      Reload latest
-                    </button>
+                  <div className="record-modal-actions edit-modal-actions">
+                    {isConfirmingDelete ? (
+                      <>
+                        <span className="tasks-delete-confirm-label">Delete this task?</span>
+                        <button type="button" className="secondary-action-button" onClick={() => setIsConfirmingDelete(false)} disabled={isSavingTask}>
+                          Cancel
+                        </button>
+                        <button type="button" className="danger-confirm-button" onClick={handleDeleteTask} disabled={isSavingTask}>
+                          Confirm Delete
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button type="button" className="danger-confirm-button" onClick={() => setIsConfirmingDelete(true)} disabled={isSavingTask}>
+                          Delete
+                        </button>
+                        <span className="modal-save-status">{isSavingTask ? "Saving…" : "Changes are checked before saving"}</span>
+                        <button type="button" className="secondary-action-button" onClick={dismissEditTask} disabled={isSavingTask}>Cancel</button>
+                        <button type="submit" className="primary-action-button" disabled={isSavingTask}>
+                          {isSavingTask ? "Saving…" : "Save Changes"}
+                        </button>
+                      </>
+                    )}
                   </div>
-                ) : null}
+                  {editConflict ? (
+                    <div className="edit-conflict" role="alert">
+                      <span>{editConflict}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const latest = Object.values(taskBoard).flat().find((task) => task.id === selectedTaskId);
+                          if (latest) openEditTask(latest);
+                        }}
+                      >
+                        Reload latest
+                      </button>
+                    </div>
+                  ) : null}
+                </form>
               </div>
             </div>
           ) : null}

@@ -12,7 +12,7 @@ import {
   type DocumentReference,
 } from "firebase/firestore";
 import type { TaskEntry, TaskStatus } from "../../types";
-import { cleanFirestoreData, FirestoreConflictError as TaskConflictError, getFirebaseApp, isFirebaseAppConfigured } from "./auth";
+import { cleanFirestoreData, FirestoreConflictError as TaskConflictError, getFirebaseApp, isFirebaseAppConfigured, type AuthUser } from "./auth";
 
 export { TaskConflictError };
 
@@ -28,6 +28,12 @@ export type TaskBoardMetadata = {
 };
 
 export type TaskSubscriptionScope = { isAdmin: true } | { isAdmin: false; email: string };
+
+export type TaskMember = {
+  id: string;
+  email: string;
+  name: string;
+};
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
@@ -53,6 +59,48 @@ function getTaskDocRef(id: string) {
 function getTaskAdminDocRef(email: string) {
   const boardRef = getTaskBoardDocRef();
   return boardRef ? doc(boardRef, "admins", normalizeEmail(email)) : null;
+}
+
+function getTaskMembersCollectionRef() {
+  const boardRef = getTaskBoardDocRef();
+  return boardRef ? collection(boardRef, "members") : null;
+}
+
+export async function registerTaskMember(user: AuthUser) {
+  const membersRef = getTaskMembersCollectionRef();
+  if (!membersRef) return;
+
+  await setDoc(doc(membersRef, user.id), {
+    // Written exactly as Firebase Auth reports it (not normalizeEmail'd) so it always
+    // matches request.auth.token.email in firestore.rules' create/update check. The read
+    // path in subscribeToTaskMembers below normalizes it for display/matching elsewhere.
+    email: user.email,
+    name: user.name.trim() || user.email,
+    lastSeenAt: serverTimestamp(),
+  }, { merge: true });
+}
+
+export function subscribeToTaskMembers(
+  onData: (members: TaskMember[]) => void,
+  onError: (error: Error) => void
+) {
+  const membersRef = getTaskMembersCollectionRef();
+  if (!membersRef) return null;
+
+  return onSnapshot(membersRef, (snapshot) => {
+    const members = snapshot.docs
+      .map((memberDoc) => {
+        const data = memberDoc.data();
+        return {
+          id: memberDoc.id,
+          email: typeof data.email === "string" ? normalizeEmail(data.email) : "",
+          name: typeof data.name === "string" ? data.name : "",
+        };
+      })
+      .filter((member) => member.email)
+      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
+    onData(members);
+  }, onError);
 }
 
 export function subscribeToTaskAdminStatus(

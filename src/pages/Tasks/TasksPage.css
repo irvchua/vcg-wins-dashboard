@@ -227,6 +227,10 @@
   gap: 10px;
 }
 
+.task-modal-row-assignee {
+  grid-template-columns: 1fr;
+}
+
 .tasks-delete-confirm-label {
   margin-right: auto;
   color: #ffb0b0;
