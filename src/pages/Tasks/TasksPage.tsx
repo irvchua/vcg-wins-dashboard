@@ -341,6 +341,19 @@ export default function TasksPage() {
     event.preventDefault();
     if (!selectedTaskId || !editTaskInitial || !editTaskDraft || isSavingTask) return;
 
+    const title = editTaskDraft.title.trim();
+    const assignedToEmail = isTaskAdmin
+      ? editTaskDraft.assignedToEmail.trim().toLowerCase()
+      : editTaskInitial.assignedToEmail;
+    if (!title) {
+      setEditConflict("Enter a task title before saving.");
+      return;
+    }
+    if (!assignedToEmail) {
+      setEditConflict("Select an assignee before saving.");
+      return;
+    }
+
     const hasChanges = (["title", "description", "assignedTo", "assignedToEmail", "priority", "status", "dueDate"] as const)
       .some((field) => (editTaskDraft[field] ?? "") !== (editTaskInitial[field] ?? ""));
     if (!hasChanges) {
@@ -351,10 +364,10 @@ export default function TasksPage() {
     const statusChanged = editTaskDraft.status !== editTaskInitial.status;
     const taskToSave: TaskEntry = {
       ...editTaskDraft,
-      title: editTaskDraft.title.trim(),
+      title,
       description: editTaskDraft.description?.trim() || undefined,
       assignedTo: editTaskDraft.assignedTo.trim(),
-      assignedToEmail: isTaskAdmin ? editTaskDraft.assignedToEmail.trim().toLowerCase() : editTaskInitial.assignedToEmail,
+      assignedToEmail,
       dueDate: editTaskDraft.dueDate || undefined,
       position: statusChanged ? taskBoard[editTaskDraft.status].length : editTaskDraft.position,
     };
@@ -384,7 +397,7 @@ export default function TasksPage() {
   }
 
   function handleDeleteTask() {
-    if (!selectedTaskId) return;
+    if (!selectedTaskId || !isTaskAdmin) return;
     const idToDelete = selectedTaskId;
 
     setTaskBoard((current) => {
@@ -709,6 +722,7 @@ export default function TasksPage() {
                   <label className="modal-field">
                     Title
                     <input
+                      required
                       value={editTaskDraft.title}
                       onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, title: event.target.value })}
                     />
@@ -794,7 +808,7 @@ export default function TasksPage() {
                   </div>
 
                   <div className="record-modal-actions edit-modal-actions">
-                    {isConfirmingDelete ? (
+                    {isTaskAdmin && isConfirmingDelete ? (
                       <>
                         <span className="tasks-delete-confirm-label">Delete this task?</span>
                         <button type="button" className="secondary-action-button" onClick={() => setIsConfirmingDelete(false)} disabled={isSavingTask}>
@@ -806,9 +820,11 @@ export default function TasksPage() {
                       </>
                     ) : (
                       <>
-                        <button type="button" className="danger-confirm-button" onClick={() => setIsConfirmingDelete(true)} disabled={isSavingTask}>
-                          Delete
-                        </button>
+                        {isTaskAdmin ? (
+                          <button type="button" className="danger-confirm-button" onClick={() => setIsConfirmingDelete(true)} disabled={isSavingTask}>
+                            Delete
+                          </button>
+                        ) : null}
                         <span className="modal-save-status">{isSavingTask ? "Saving…" : "Changes are checked before saving"}</span>
                         <button type="button" className="secondary-action-button" onClick={dismissEditTask} disabled={isSavingTask}>Cancel</button>
                         <button type="submit" className="primary-action-button" disabled={isSavingTask}>

@@ -61,8 +61,7 @@ service cloud.firestore {
           || (approvedEditor()
             && resource.data.assignedToEmail == request.auth.token.email
             && request.resource.data.assignedToEmail == request.auth.token.email);
-        allow delete: if taskAdmin()
-          || (approvedEditor() && resource.data.assignedToEmail == request.auth.token.email);
+        allow delete: if taskAdmin();
       }
       match /admins/{email} {
         allow read: if taskAdmin();

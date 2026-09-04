@@ -273,8 +273,10 @@ export async function saveTaskPositions(
     const snapshots = await Promise.all(refs.map(({ ref }) => transaction.get(ref)));
 
     refs.forEach(({ entry, ref }, index) => {
-      // Skip tasks someone else deleted in the meantime instead of resurrecting a partial doc.
-      if (!snapshots[index].exists()) return;
+      const snapshot = snapshots[index];
+      if (!snapshot.exists() || (snapshot.data().version ?? 1) !== entry.version) {
+        throw new TaskConflictError();
+      }
       transaction.set(ref, cleanFirestoreData({
         position: entry.position,
         status: entry.status,
