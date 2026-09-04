@@ -13,6 +13,11 @@ dist-ssr
 .env
 *.local
 
+# Firebase Admin SDK service account keys — never commit these, they grant full
+# admin access to the Firebase project, bypassing all Firestore security rules.
+*serviceAccount*.json
+*service-account*.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
