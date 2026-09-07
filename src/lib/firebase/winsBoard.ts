@@ -22,8 +22,14 @@ type PersistedBoardData = {
   hasLegacyBoard: boolean;
   updatedAt: string | null;
   wins: number;
-  winsTarget: number;
+  winsTarget: string;
 };
+
+function normalizeWinsTargetField(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value === 0 ? "" : String(value);
+  return "";
+}
 
 type StoredRecord = BoardEntry & {
   archivedAt?: string;
@@ -83,7 +89,7 @@ export function subscribeToBoard(
         hasLegacyBoard: true,
         updatedAt: (metadata.updatedAt as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? null,
         wins: typeof metadata.wins === "number" ? metadata.wins : 0,
-        winsTarget: typeof metadata.winsTarget === "number" ? metadata.winsTarget : 0,
+        winsTarget: normalizeWinsTargetField(metadata.winsTarget),
       });
       return;
     }
@@ -115,7 +121,7 @@ export function subscribeToBoard(
       hasLegacyBoard: false,
       updatedAt: (metadata.updatedAt as { toDate?: () => Date } | undefined)?.toDate?.().toISOString() ?? null,
       wins: typeof metadata.wins === "number" ? metadata.wins : 0,
-      winsTarget: typeof metadata.winsTarget === "number" ? metadata.winsTarget : 0,
+      winsTarget: normalizeWinsTargetField(metadata.winsTarget),
     });
   };
 
@@ -140,7 +146,7 @@ export function subscribeToBoard(
 
 export async function saveBoardData(
   wins: number,
-  winsTarget: number,
+  winsTarget: string,
   activities: ActivityEntry[]
 ) {
   const boardDocRef = getBoardDocRef();

@@ -49,7 +49,8 @@ const STORAGE_NAMESPACE = isDemoMode ? "vcg-demo" : "vcg";
 const STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-board-data`;
 const ARCHIVED_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-board-archive`;
 const WINS_STORAGE_KEY = `${STORAGE_NAMESPACE}-total-wins`;
-const WINS_TARGET_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-target`;
+const LEGACY_WINS_TARGET_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-target`;
+const WINS_TARGET_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-target-v2`;
 const ACTIVITY_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-board-activity`;
 const NOTE_MAX_LENGTH = 80;
 const CELEBRATION_VISUAL_DURATION_MS = 33_000;
@@ -318,14 +319,24 @@ function loadInitialWins(): number {
   return savedWins ? Number(savedWins) : isDemoMode ? 8 : 104;
 }
 
-function loadInitialWinsTarget(): number {
+function loadInitialWinsTarget(): string {
   const savedTarget = localStorage.getItem(WINS_TARGET_STORAGE_KEY);
-  return savedTarget ? Number(savedTarget) : 0;
+  if (savedTarget !== null) return savedTarget;
+
+  const legacyTarget = localStorage.getItem(LEGACY_WINS_TARGET_STORAGE_KEY);
+  return legacyTarget === "0" ? "" : legacyTarget ?? "";
 }
 
 function normalizeWinsEditorValue(value: string, fallback: number): number {
   const nextValue = Number(value.trim());
   return Number.isFinite(nextValue) ? Math.max(0, Math.trunc(nextValue)) : fallback;
+}
+
+const WINS_TARGET_PATTERN = /^[a-zA-Z0-9]*$/;
+
+function normalizeWinsTargetEditorValue(value: string, fallback: string): string {
+  const trimmedValue = value.trim();
+  return WINS_TARGET_PATTERN.test(trimmedValue) ? trimmedValue : fallback;
 }
 
 function loadInitialActivities(): ActivityEntry[] {
@@ -371,8 +382,8 @@ export default function WinsBoardPage() {
   const [isSavingWins, setIsSavingWins] = useState(false);
   const [winsSaveMessage, setWinsSaveMessage] = useState("");
   const [winsAnimation, setWinsAnimation] = useState<WinsAnimation | null>(null);
-  const [winsTarget, setWinsTarget] = useState<number>(loadInitialWinsTarget);
-  const [winsTargetInput, setWinsTargetInput] = useState(() => String(loadInitialWinsTarget()));
+  const [winsTarget, setWinsTarget] = useState<string>(loadInitialWinsTarget);
+  const [winsTargetInput, setWinsTargetInput] = useState(loadInitialWinsTarget);
   const [isWinsTargetDirty, setIsWinsTargetDirty] = useState(false);
   const [isSavingWinsTarget, setIsSavingWinsTarget] = useState(false);
   const [winsTargetSaveMessage, setWinsTargetSaveMessage] = useState("");
@@ -555,7 +566,7 @@ export default function WinsBoardPage() {
   }, [isWinsDirty, wins]);
 
   useEffect(() => {
-    if (!isWinsTargetInputFocused.current && !isWinsTargetDirty) setWinsTargetInput(String(winsTarget));
+    if (!isWinsTargetInputFocused.current && !isWinsTargetDirty) setWinsTargetInput(winsTarget);
   }, [isWinsTargetDirty, winsTarget]);
 
   useEffect(() => {
@@ -610,7 +621,7 @@ export default function WinsBoardPage() {
         const nextArchivedEntries = normalizeArchivedEntries(remoteData.archivedEntries);
         const nextBoard = normalizeBoard(remoteData.board);
         const nextWins = Number.isFinite(remoteData.wins) ? remoteData.wins : 104;
-        const nextWinsTarget = Number.isFinite(remoteData.winsTarget) ? remoteData.winsTarget : 0;
+        const nextWinsTarget = typeof remoteData.winsTarget === "string" ? remoteData.winsTarget : "";
         if (!hasReceivedInitialWins.current) {
           previousWins.current = nextWins;
           hasReceivedInitialWins.current = true;
@@ -1113,7 +1124,7 @@ export default function WinsBoardPage() {
       return;
     }
 
-    const nextWinsTarget = normalizeWinsEditorValue(winsTargetInput, winsTarget);
+    const nextWinsTarget = normalizeWinsTargetEditorValue(winsTargetInput, winsTarget);
     const payload = JSON.stringify({
       activities,
       wins: normalizedWins,
@@ -1136,7 +1147,7 @@ export default function WinsBoardPage() {
       setLastUpdatedAt(new Date().toISOString());
 
       setWinsTarget(nextWinsTarget);
-      if (isWinsTargetDirty && winsTargetInput.trim() === String(nextWinsTarget)) {
+      if (isWinsTargetDirty && winsTargetInput.trim() === nextWinsTarget) {
         setIsWinsTargetDirty(false);
         setWinsTargetSaveMessage("Saved");
       }
@@ -1156,20 +1167,14 @@ export default function WinsBoardPage() {
     if (isSavingWinsTarget || !isWinsTargetDirty) return;
 
     const trimmedValue = winsTargetInput.trim();
-    if (!trimmedValue) {
-      setWinsTargetSaveMessage("Enter a target");
+    if (!WINS_TARGET_PATTERN.test(trimmedValue)) {
+      setWinsTargetSaveMessage("Use letters and numbers only");
       return;
     }
 
-    const nextTarget = Number(trimmedValue);
-    if (!Number.isFinite(nextTarget)) {
-      setWinsTargetSaveMessage("Enter a valid number");
-      return;
-    }
-
-    const normalizedTarget = Math.max(0, Math.trunc(nextTarget));
+    const normalizedTarget = trimmedValue;
     if (normalizedTarget === winsTarget) {
-      setWinsTargetInput(String(winsTarget));
+      setWinsTargetInput(winsTarget);
       setIsWinsTargetDirty(false);
       setWinsTargetSaveMessage("No changes to save");
       return;
@@ -1180,7 +1185,7 @@ export default function WinsBoardPage() {
 
     if (!isFirebaseConfigured) {
       setWinsTarget(normalizedTarget);
-      setWinsTargetInput(String(normalizedTarget));
+      setWinsTargetInput(normalizedTarget);
       setIsWinsTargetDirty(false);
       setWinsTargetSaveMessage("Saved locally");
       setIsSavingWinsTarget(false);
@@ -1204,7 +1209,7 @@ export default function WinsBoardPage() {
         setSyncStatus("Synced with Firebase");
       }
       setWinsTarget(normalizedTarget);
-      setWinsTargetInput(String(normalizedTarget));
+      setWinsTargetInput(normalizedTarget);
       setIsWinsTargetDirty(false);
       setWinsTargetSaveMessage("Saved");
       setLastUpdatedAt(new Date().toISOString());
@@ -1455,7 +1460,7 @@ export default function WinsBoardPage() {
                 <strong>{totalEntries}</strong>
               </div>
               <div className="wins-block">
-                {winsTarget > 0 ? (
+                {winsTarget ? (
                   <div className="wins-target">
                     Target <strong>{winsTarget}</strong>
                   </div>
@@ -1609,16 +1614,16 @@ export default function WinsBoardPage() {
                     {isWinsTargetDirty ? <strong className="unsaved-indicator">Unsaved</strong> : null}
                   </span>
                   <input
-                    type="number"
-                    min="0"
-                    step="1"
+                    type="text"
+                    inputMode="text"
+                    pattern="[a-zA-Z0-9]*"
                     value={winsTargetInput}
                     onFocus={(event) => {
                       isWinsTargetInputFocused.current = true;
                       event.currentTarget.select();
                     }}
                     onChange={(event) => {
-                      setWinsTargetInput(event.target.value);
+                      setWinsTargetInput(event.target.value.replace(/[^a-zA-Z0-9]/g, ""));
                       setIsWinsTargetDirty(true);
                       setWinsTargetSaveMessage("");
                     }}
@@ -1628,7 +1633,7 @@ export default function WinsBoardPage() {
                     onKeyDown={(event) => {
                       if (event.key === "Enter") void saveWinsTargetInput();
                       if (event.key === "Escape") {
-                        setWinsTargetInput(String(winsTarget));
+                        setWinsTargetInput(winsTarget);
                         setIsWinsTargetDirty(false);
                         setWinsTargetSaveMessage("");
                         event.currentTarget.blur();
