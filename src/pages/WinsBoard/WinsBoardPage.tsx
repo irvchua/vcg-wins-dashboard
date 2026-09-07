@@ -332,7 +332,7 @@ function normalizeWinsEditorValue(value: string, fallback: number): number {
   return Number.isFinite(nextValue) ? Math.max(0, Math.trunc(nextValue)) : fallback;
 }
 
-const WINS_TARGET_PATTERN = /^[a-zA-Z0-9]*$/;
+const WINS_TARGET_PATTERN = /^[a-zA-Z0-9 ]*$/;
 
 function normalizeWinsTargetEditorValue(value: string, fallback: string): string {
   const trimmedValue = value.trim();
@@ -1168,7 +1168,7 @@ export default function WinsBoardPage() {
 
     const trimmedValue = winsTargetInput.trim();
     if (!WINS_TARGET_PATTERN.test(trimmedValue)) {
-      setWinsTargetSaveMessage("Use letters and numbers only");
+      setWinsTargetSaveMessage("Use letters, numbers, and spaces only");
       return;
     }
 
@@ -1616,14 +1616,14 @@ export default function WinsBoardPage() {
                   <input
                     type="text"
                     inputMode="text"
-                    pattern="[a-zA-Z0-9]*"
+                    pattern="[a-zA-Z0-9 ]*"
                     value={winsTargetInput}
                     onFocus={(event) => {
                       isWinsTargetInputFocused.current = true;
                       event.currentTarget.select();
                     }}
                     onChange={(event) => {
-                      setWinsTargetInput(event.target.value.replace(/[^a-zA-Z0-9]/g, ""));
+                      setWinsTargetInput(event.target.value.replace(/[^a-zA-Z0-9 ]/g, ""));
                       setIsWinsTargetDirty(true);
                       setWinsTargetSaveMessage("");
                     }}
