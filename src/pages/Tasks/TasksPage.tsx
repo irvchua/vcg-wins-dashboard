@@ -136,6 +136,7 @@ export default function TasksPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
   const [addTaskError, setAddTaskError] = useState("");
+  const [isAddTaskLocked, setIsAddTaskLocked] = useState(false);
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [addTaskDraft, setAddTaskDraft] = useState<AddTaskDraft>(defaultAddTaskDraft);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -146,6 +147,7 @@ export default function TasksPage() {
   const [isSavingTask, setIsSavingTask] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const hasInitializedBoard = useRef(false);
+  const pendingAddTaskRef = useRef<{ task: TaskEntry; requestId: string } | null>(null);
 
   const canEditTasks = canUserEdit(authUser);
   const showAuthGate = isTasksFirebaseConfigured && (!authUser || !canEditTasks);
@@ -153,6 +155,13 @@ export default function TasksPage() {
     ? editTaskInitial.assignedByEmail === authUser?.email.toLowerCase()
     : isTaskAdmin);
   const updaterName = authUser?.name.trim() || "Local user";
+  const editAssignedToEmail = isTaskAdmin
+    ? editTaskDraft?.assignedToEmail.trim().toLowerCase()
+    : editTaskInitial?.assignedToEmail;
+  const editNeedsReview = Boolean(editTaskDraft && editTaskInitial
+    && editTaskDraft.status !== "todo" && editTaskDraft.status !== "done"
+    && (editTaskDraft.status !== editTaskInitial.status || editTaskInitial.dueDateReviewRequired
+      || editAssignedToEmail !== editTaskInitial.assignedToEmail));
 
   useEffect(() => {
     if (!isTasksFirebaseConfigured) return;
@@ -314,6 +323,8 @@ export default function TasksPage() {
   }
 
   function openAddTask(status: TaskStatus = "todo") {
+    pendingAddTaskRef.current = null;
+    setIsAddTaskLocked(false);
     setAddTaskError("");
     setAddTaskDraft({
       ...defaultAddTaskDraft,
@@ -326,6 +337,8 @@ export default function TasksPage() {
   }
 
   function closeAddTask() {
+    pendingAddTaskRef.current = null;
+    setIsAddTaskLocked(false);
     setIsAddTaskOpen(false);
     setAddTaskDraft(defaultAddTaskDraft);
   }
@@ -336,7 +349,8 @@ export default function TasksPage() {
     const assignedToEmail = (isTaskAdmin ? addTaskDraft.assignedToEmail : authUser?.email ?? "").trim().toLowerCase();
     if (!title || !assignedToEmail || isSavingTask) return;
 
-    const newTask: TaskEntry = {
+    // Keep the whole payload stable: the server fingerprints timestamps and position too.
+    const newTask: TaskEntry = pendingAddTaskRef.current?.task ?? {
       id: createTaskId(),
       title,
       description: addTaskDraft.description.trim() || undefined,
@@ -353,10 +367,13 @@ export default function TasksPage() {
       updatedBy: updaterName,
       version: 1,
     };
+    const requestId = pendingAddTaskRef.current?.requestId ?? createTaskId();
+    pendingAddTaskRef.current = { task: newTask, requestId };
+    setIsAddTaskLocked(true);
     setIsSavingTask(true);
     setAddTaskError("");
     try {
-      const savedTask = await createTask(newTask, updaterName);
+      const savedTask = await createTask(newTask, updaterName, requestId);
       setTaskBoard((current) => groupTasksByStatus([...Object.values(current).flat().filter((task) => task.id !== savedTask.id), savedTask]));
       closeAddTask();
     } catch (error) {
@@ -388,9 +405,7 @@ export default function TasksPage() {
     if (!selectedTaskId || !editTaskInitial || !editTaskDraft || isSavingTask) return;
 
     const title = editTaskDraft.title.trim();
-    const assignedToEmail = isTaskAdmin
-      ? editTaskDraft.assignedToEmail.trim().toLowerCase()
-      : editTaskInitial.assignedToEmail;
+    const assignedToEmail = editAssignedToEmail;
     if (!title) {
       setEditConflict("Enter a task title before saving.");
       return;
@@ -402,7 +417,7 @@ export default function TasksPage() {
 
     const statusChanged = editTaskDraft.status !== editTaskInitial.status;
     const isAssignee = !isTasksFirebaseConfigured || assignedToEmail === authUser?.email.toLowerCase();
-    const needsReview = editTaskDraft.status !== "todo" && editTaskDraft.status !== "done" && (statusChanged || editTaskInitial.dueDateReviewRequired);
+    const needsReview = editNeedsReview;
     if (needsReview && isAssignee && (!dueDateConfirmed || !editTaskDraft.dueDate)) {
       setEditConflict("Choose and confirm the due date for this status before saving.");
       return;
@@ -709,13 +724,14 @@ export default function TasksPage() {
           )}
 
           {isAddTaskOpen ? (
-            <div className="modal-backdrop" role="presentation" onMouseDown={closeAddTask}>
+            <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!isSavingTask) closeAddTask(); }}>
               <div className="task-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
                 <h2>New Task</h2>
                 <form onSubmit={submitAddTask}>
                   <label className="modal-field">
                     Title
                     <input
+                      disabled={isAddTaskLocked}
                       value={addTaskDraft.title}
                       onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, title: event.target.value }))}
                       required
@@ -725,6 +741,7 @@ export default function TasksPage() {
                   <label className="modal-field">
                     Description
                     <textarea
+                      disabled={isAddTaskLocked}
                       value={addTaskDraft.description}
                       onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, description: event.target.value }))}
                     />
@@ -734,6 +751,7 @@ export default function TasksPage() {
                       <label className="modal-field">
                         Assignee
                         <select
+                          disabled={isAddTaskLocked}
                           required
                           value={addTaskDraft.assignedToEmail}
                           onChange={(event) => {
@@ -758,6 +776,7 @@ export default function TasksPage() {
                     <label className="modal-field">
                       Assignee
                       <input
+                        disabled={isAddTaskLocked}
                         value={addTaskDraft.assignedTo}
                         onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, assignedTo: event.target.value }))}
                       />
@@ -768,6 +787,7 @@ export default function TasksPage() {
                     <label className="modal-field">
                       Priority
                       <select
+                        disabled={isAddTaskLocked}
                         value={addTaskDraft.priority}
                         onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, priority: event.target.value as TaskPriority }))}
                       >
@@ -779,6 +799,7 @@ export default function TasksPage() {
                     <label className="modal-field">
                       Status
                       <select
+                        disabled={isAddTaskLocked}
                         value={addTaskDraft.status}
                         onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, status: event.target.value as TaskStatus, dueDate: event.target.value === "todo" && !draft.dueDate ? suggestedDueDate() : draft.dueDate }))}
                       >
@@ -790,15 +811,16 @@ export default function TasksPage() {
                     <label className="modal-field">
                       Due date
                       <input
+                        disabled={isAddTaskLocked}
                         type="date"
                         value={addTaskDraft.dueDate}
                         onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, dueDate: event.target.value }))}
                       />
                     </label>
                   </div>
-                  {addTaskError ? <p className="tasks-sync-message" role="alert">{addTaskError}</p> : null}
+                  {addTaskError ? <p className="tasks-sync-message" role="alert">{addTaskError} Retry to confirm this submission, or cancel to start a new draft.</p> : null}
                   <div className="record-modal-actions">
-                    <button type="button" className="secondary-action-button" onClick={closeAddTask}>Cancel</button>
+                    <button type="button" className="secondary-action-button" onClick={closeAddTask} disabled={isSavingTask}>Cancel</button>
                     <button type="submit" className="primary-action-button" disabled={isSavingTask}>{isSavingTask ? "Saving…" : "Add Task"}</button>
                   </div>
                 </form>
@@ -835,6 +857,7 @@ export default function TasksPage() {
                           value={editTaskDraft.assignedToEmail}
                           onChange={(event) => {
                             const member = taskMembers.find((candidate) => candidate.email === event.target.value);
+                            setDueDateConfirmed(false);
                             setEditTaskDraft((draft) => draft && ({
                               ...draft,
                               assignedTo: member?.name || member?.email || "",
@@ -901,13 +924,13 @@ export default function TasksPage() {
                   </div>
 
                   {editTaskDraft.status === "todo" ? <p className="tasks-assignee-note">Only the assigner can change the To Do due date.</p> : null}
-                  {editTaskDraft.status !== "todo" && editTaskDraft.status !== "done" && (editTaskDraft.status !== editTaskInitial?.status || editTaskInitial?.dueDateReviewRequired) ? (
+                  {editNeedsReview ? (
                     <div className="task-date-review">
                       <p className="task-date-review-title">Review the due date</p>
-                      {!isTasksFirebaseConfigured || editTaskDraft.assignedToEmail === authUser?.email.toLowerCase() ? (
+                      {!isTasksFirebaseConfigured || editAssignedToEmail === authUser?.email.toLowerCase() ? (
                         <label className="task-date-review-check">
                           <input type="checkbox" checked={dueDateConfirmed} onChange={(event) => setDueDateConfirmed(event.target.checked)} />
-                          <span>This due date works for the new status.</span>
+                          <span>I have reviewed and confirmed this due date.</span>
                         </label>
                       ) : <p className="task-date-review-note">The assignee will be prompted to confirm a due date.</p>}
                     </div>

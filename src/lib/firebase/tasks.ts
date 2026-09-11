@@ -206,12 +206,12 @@ export async function initializeTaskBoard(name = "Tasks") {
   });
 }
 
-async function callTaskApi<T>(body: Record<string, unknown>): Promise<T> {
+async function callTaskApi<T>(body: Record<string, unknown>, requestId: string = crypto.randomUUID()): Promise<T> {
   const app = getFirebaseApp();
   const user = app && getAuth(app).currentUser;
   if (!user) throw new Error("Sign in to manage tasks.");
   const token = await user.getIdToken();
-  const payload = JSON.stringify({ boardId: tasksBoardId, requestId: crypto.randomUUID(), ...body });
+  const payload = JSON.stringify({ boardId: tasksBoardId, requestId, ...body });
   let response: Response | undefined;
   // Reuse the request ID if a response is lost after the server commits a save.
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -241,9 +241,9 @@ export async function retryTaskEmail(receiptId: string) {
   return callTaskApi<null>({ action: "retryEmail", receiptId });
 }
 
-export async function createTask(task: TaskEntry, actor: string) {
+export async function createTask(task: TaskEntry, actor: string, requestId?: string) {
   if (!isTasksFirebaseConfigured) return { ...task, createdBy: actor };
-  return callTaskApi<TaskEntry>({ action: "create", task });
+  return callTaskApi<TaskEntry>({ action: "create", task }, requestId);
 }
 
 export async function saveTask(task: TaskEntry, expectedVersion: number, actor: string, dueDateConfirmed = false) {
