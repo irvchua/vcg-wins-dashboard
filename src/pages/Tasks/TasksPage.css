@@ -117,7 +117,27 @@
 }
 
 .task-card.task-overdue {
-  border-color: rgba(255, 92, 92, 0.55);
+  border-color: rgba(255, 112, 112, 0.7);
+  background: rgba(151, 40, 50, 0.2);
+  box-shadow: inset 4px 0 0 #ff7070;
+}
+
+.task-overdue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 3px 0;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 157, 157, 0.35);
+  border-radius: 6px;
+  background: rgba(255, 112, 112, 0.14);
+  color: #ffc3c3;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.task-overdue-badge svg {
+  flex-shrink: 0;
 }
 
 .task-card-handle {
@@ -242,4 +262,85 @@
   .task-board {
     grid-template-columns: 1fr;
   }
+}
+
+.task-date-review {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.task-date-review-title {
+  margin: 0;
+  color: #e4e7ed;
+  font-weight: 600;
+}
+
+.task-date-review-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: #b8bfcd;
+  cursor: pointer;
+}
+
+.task-date-review-check input {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  accent-color: #91baff;
+  cursor: pointer;
+}
+
+.task-date-review-check input:focus-visible {
+  outline: 2px solid #91baff;
+  outline-offset: 3px;
+}
+
+.task-date-review-note {
+  margin: 0;
+  color: #b8bfcd;
+}
+
+.task-edit-actions {
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.task-edit-actions button {
+  flex-shrink: 0;
+  min-height: 40px;
+  padding: 9px 14px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.task-actions-spacer {
+  flex: 1;
+}
+
+.task-delete-action {
+  border: 1px solid transparent;
+  background: transparent;
+  color: #ffabab;
+  cursor: pointer;
+}
+
+.task-delete-action:hover {
+  background: rgba(255, 112, 112, 0.1);
+}
+
+.task-delete-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

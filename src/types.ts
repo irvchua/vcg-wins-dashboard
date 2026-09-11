@@ -44,6 +44,8 @@ export type TaskEntry = {
   status: TaskStatus;
   priority: TaskPriority;
   dueDate?: string;
+  dueDateReviewRequired?: boolean;
+  assignedByEmail?: string;
   position?: number;
   createdBy: string;
   createdAt: string;

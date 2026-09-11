@@ -1,3 +1,4 @@
+import { getAuth } from "firebase/auth";
 import {
   collection,
   deleteDoc,
@@ -9,10 +10,9 @@ import {
   serverTimestamp,
   setDoc,
   where,
-  type DocumentReference,
 } from "firebase/firestore";
 import type { TaskEntry, TaskStatus } from "../../types";
-import { cleanFirestoreData, FirestoreConflictError as TaskConflictError, getFirebaseApp, isFirebaseAppConfigured, type AuthUser } from "./auth";
+import { FirestoreConflictError as TaskConflictError, getFirebaseApp, isFirebaseAppConfigured, type AuthUser } from "./auth";
 
 export { TaskConflictError };
 
@@ -49,11 +49,6 @@ function getTaskBoardDocRef() {
 function getTasksCollectionRef() {
   const boardRef = getTaskBoardDocRef();
   return boardRef ? collection(boardRef, "tasks") : null;
-}
-
-function getTaskDocRef(id: string) {
-  const tasksRef = getTasksCollectionRef();
-  return tasksRef ? doc(tasksRef, id) : null;
 }
 
 function getTaskAdminDocRef(email: string) {
@@ -211,93 +206,60 @@ export async function initializeTaskBoard(name = "Tasks") {
   });
 }
 
-export async function createTask(task: TaskEntry, actor: string) {
-  const taskRef = getTaskDocRef(task.id);
-  if (!taskRef) return;
-
-  await setDoc(taskRef, cleanFirestoreData({
-    ...task,
-    assignedToEmail: normalizeEmail(task.assignedToEmail),
-    createdBy: actor,
-    createdAt: task.createdAt ?? new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    updatedBy: actor,
-    version: 1,
-  }));
+async function callTaskApi<T>(body: Record<string, unknown>): Promise<T> {
+  const app = getFirebaseApp();
+  const user = app && getAuth(app).currentUser;
+  if (!user) throw new Error("Sign in to manage tasks.");
+  const token = await user.getIdToken();
+  const payload = JSON.stringify({ boardId: tasksBoardId, requestId: crypto.randomUUID(), ...body });
+  let response: Response | undefined;
+  // Reuse the request ID if a response is lost after the server commits a save.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      response = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: payload,
+      });
+      if (response.status >= 500 && attempt === 0) continue;
+      break;
+    } catch (error) {
+      if (attempt === 1) throw error;
+    }
+  }
+  if (!response) throw new Error("Task server unavailable.");
+  const data = await response.json();
+  if (response.status === 409) throw new TaskConflictError();
+  if (!response.ok) throw new Error(data.error || "Task could not be saved.");
+  if (data.emailStatus === "pending" || data.emailStatus === "expired") {
+    window.dispatchEvent(new CustomEvent("task-email-pending", { detail: { receiptId: data.receiptId, expired: data.emailStatus === "expired" } }));
+  }
+  return data.result as T;
 }
 
-export async function saveTask(task: TaskEntry, expectedVersion: number, actor: string) {
-  const taskRef = getTaskDocRef(task.id);
-  const app = getFirebaseApp();
-  if (!taskRef || !app) return { ...task, version: expectedVersion + 1 };
+export async function retryTaskEmail(receiptId: string) {
+  return callTaskApi<null>({ action: "retryEmail", receiptId });
+}
 
-  const database = getFirestore(app);
-  const updatedAt = new Date().toISOString();
-  await runTransaction(database, async (transaction) => {
-    const snapshot = await transaction.get(taskRef);
-    if (!snapshot.exists() || (snapshot.data().version ?? 1) !== expectedVersion) {
-      throw new TaskConflictError();
-    }
-    const existingTask = snapshot.data() as TaskEntry;
-    transaction.set(taskRef, cleanFirestoreData({
-      ...task,
-      assignedToEmail: normalizeEmail(task.assignedToEmail),
-      createdAt: existingTask.createdAt,
-      createdBy: existingTask.createdBy,
-      updatedAt,
-      updatedBy: actor,
-      version: expectedVersion + 1,
-    }));
-  });
-  return { ...task, assignedToEmail: normalizeEmail(task.assignedToEmail), updatedAt, updatedBy: actor, version: expectedVersion + 1 };
+export async function createTask(task: TaskEntry, actor: string) {
+  if (!isTasksFirebaseConfigured) return { ...task, createdBy: actor };
+  return callTaskApi<TaskEntry>({ action: "create", task });
+}
+
+export async function saveTask(task: TaskEntry, expectedVersion: number, actor: string, dueDateConfirmed = false) {
+  if (!isTasksFirebaseConfigured) return { ...task, updatedBy: actor, version: expectedVersion + 1 };
+  return callTaskApi<TaskEntry>({ action: "update", task, expectedVersion, dueDateConfirmed });
 }
 
 export async function saveTaskPositions(
   entries: Array<{ id: string; position: number; status: TaskStatus; version: number }>,
   actor: string
 ) {
-  const app = getFirebaseApp();
-  if (!app || !entries.length) return;
-
-  const refs: Array<{ entry: (typeof entries)[number]; ref: DocumentReference }> = [];
-  entries.forEach((entry) => {
-    const taskRef = getTaskDocRef(entry.id);
-    if (taskRef) refs.push({ entry, ref: taskRef });
-  });
-  if (!refs.length) return;
-
-  const database = getFirestore(app);
-  const updatedAt = new Date().toISOString();
-  await runTransaction(database, async (transaction) => {
-    // All reads must happen before any writes in a Firestore transaction.
-    const snapshots = await Promise.all(refs.map(({ ref }) => transaction.get(ref)));
-
-    refs.forEach(({ entry, ref }, index) => {
-      const snapshot = snapshots[index];
-      if (!snapshot.exists() || (snapshot.data().version ?? 1) !== entry.version) {
-        throw new TaskConflictError();
-      }
-      transaction.set(ref, cleanFirestoreData({
-        position: entry.position,
-        status: entry.status,
-        version: entry.version + 1,
-        updatedAt,
-        updatedBy: actor,
-      }), { merge: true });
-    });
-  });
-
-  return entries.map((entry) => ({
-    ...entry,
-    updatedAt,
-    updatedBy: actor,
-    version: entry.version + 1,
-  }));
+  if (!isTasksFirebaseConfigured || !entries.length) return entries.map((entry) => ({ ...entry, version: entry.version + 1, updatedBy: actor }));
+  return callTaskApi<typeof entries>({ action: "reorder", entries });
 }
 
-export async function deleteTask(id: string) {
-  const taskRef = getTaskDocRef(id);
-  if (!taskRef) return;
-
-  await deleteDoc(taskRef);
+export async function deleteTask(id: string, expectedVersion: number) {
+  if (!isTasksFirebaseConfigured) return;
+  await callTaskApi<null>({ action: "delete", task: { id }, expectedVersion });
 }
