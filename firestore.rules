@@ -55,14 +55,12 @@ service cloud.firestore {
       match /tasks/{taskId} {
         allow read: if taskAdmin()
           || (approvedEditor() && resource.data.assignedToEmail == request.auth.token.email);
-        allow create: if taskAdmin()
-          || (approvedEditor() && request.resource.data.assignedToEmail == request.auth.token.email);
-        allow update: if taskAdmin()
-          || (approvedEditor()
-            && resource.data.assignedToEmail == request.auth.token.email
-            && request.resource.data.assignedToEmail == request.auth.token.email);
-        allow delete: if taskAdmin();
+        // Mutations go through the authenticated Vercel API so the task and its
+        // notification are committed atomically. Admin SDK bypasses these rules;
+        // server/task-policy.js enforces ownership and deadline permissions.
+        allow write: if false;
       }
+
       match /admins/{email} {
         allow read: if taskAdmin();
         allow create, update, delete: if taskAdmin()

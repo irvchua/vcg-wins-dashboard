@@ -15,6 +15,7 @@ import {
   initializeTaskBoard,
   isTasksFirebaseConfigured,
   registerTaskMember,
+  retryTaskEmail,
   saveTask,
   saveTaskPositions,
   subscribeToTaskAdminStatus,
@@ -75,6 +76,12 @@ const defaultAddTaskDraft: AddTaskDraft = {
   title: "",
 };
 
+function suggestedDueDate(): string {
+  const date = new Date();
+  date.setDate(date.getDate() + 3);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function createTaskId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -106,7 +113,9 @@ function groupTasksByStatus(tasks: TaskEntry[]): TaskBoardState {
 
 function isOverdue(task: TaskEntry): boolean {
   if (!task.dueDate || task.status === "done") return false;
-  return task.dueDate < new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  return task.dueDate < today;
 }
 
 export default function TasksPage() {
@@ -121,22 +130,38 @@ export default function TasksPage() {
     isTasksFirebaseConfigured ? [] : localModeTaskMembers
   );
   const [memberDirectoryMessage, setMemberDirectoryMessage] = useState("");
+  const [pendingEmails, setPendingEmails] = useState<Array<{ receiptId: string; expired: boolean }>>([]);
+  const [isRetryingEmail, setIsRetryingEmail] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
+  const [addTaskError, setAddTaskError] = useState("");
+  const [isAddTaskLocked, setIsAddTaskLocked] = useState(false);
   const [isAddTaskOpen, setIsAddTaskOpen] = useState(false);
   const [addTaskDraft, setAddTaskDraft] = useState<AddTaskDraft>(defaultAddTaskDraft);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [editTaskDraft, setEditTaskDraft] = useState<TaskEntry | null>(null);
   const [editTaskInitial, setEditTaskInitial] = useState<TaskEntry | null>(null);
+  const [dueDateConfirmed, setDueDateConfirmed] = useState(false);
   const [editConflict, setEditConflict] = useState("");
   const [isSavingTask, setIsSavingTask] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const hasInitializedBoard = useRef(false);
+  const pendingAddTaskRef = useRef<{ task: TaskEntry; requestId: string } | null>(null);
 
   const canEditTasks = canUserEdit(authUser);
   const showAuthGate = isTasksFirebaseConfigured && (!authUser || !canEditTasks);
+  const canEditTodoDueDate = !isTasksFirebaseConfigured || (editTaskInitial?.assignedByEmail
+    ? editTaskInitial.assignedByEmail === authUser?.email.toLowerCase()
+    : isTaskAdmin);
   const updaterName = authUser?.name.trim() || "Local user";
+  const editAssignedToEmail = isTaskAdmin
+    ? editTaskDraft?.assignedToEmail.trim().toLowerCase()
+    : editTaskInitial?.assignedToEmail;
+  const editNeedsReview = Boolean(editTaskDraft && editTaskInitial
+    && editTaskDraft.status !== "todo" && editTaskDraft.status !== "done"
+    && (editTaskDraft.status !== editTaskInitial.status || editTaskInitial.dueDateReviewRequired
+      || editAssignedToEmail !== editTaskInitial.assignedToEmail));
 
   useEffect(() => {
     if (!isTasksFirebaseConfigured) return;
@@ -145,6 +170,7 @@ export default function TasksPage() {
       const hasTaskAccess = Boolean(user && canUserEdit(user));
       setAuthUser(user);
       setTaskBoard(emptyTaskBoard);
+      setPendingEmails([]);
       setTaskMembers([]);
       setIsTaskAdmin(false);
       setIsAdminStatusLoading(hasTaskAccess);
@@ -242,6 +268,26 @@ export default function TasksPage() {
     return () => unsubscribe?.();
   }, [isTaskAdmin]);
 
+  useEffect(() => {
+    const onPending = (event: Event) => {
+      const notice = (event as CustomEvent<{ receiptId: string; expired: boolean }>).detail;
+      setPendingEmails((current) => [...current.filter((item) => item.receiptId !== notice.receiptId), notice]);
+    };
+    window.addEventListener("task-email-pending", onPending);
+    return () => window.removeEventListener("task-email-pending", onPending);
+  }, []);
+
+  async function retryEmails() {
+    setIsRetryingEmail(true);
+    const pending = pendingEmails.filter((item) => !item.expired);
+    setPendingEmails((current) => current.filter((item) => item.expired));
+    for (const item of pending) {
+      try { await retryTaskEmail(item.receiptId); }
+      catch { setPendingEmails((current) => [...current, item]); }
+    }
+    setIsRetryingEmail(false);
+  }
+
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const isFiltering = Boolean(normalizedSearchQuery) || priorityFilter !== "all";
   const filteredTaskBoard = useMemo(() => {
@@ -277,9 +323,13 @@ export default function TasksPage() {
   }
 
   function openAddTask(status: TaskStatus = "todo") {
+    pendingAddTaskRef.current = null;
+    setIsAddTaskLocked(false);
+    setAddTaskError("");
     setAddTaskDraft({
       ...defaultAddTaskDraft,
       status,
+      dueDate: status === "todo" ? suggestedDueDate() : "",
       assignedTo: isTaskAdmin ? "" : (authUser?.name ?? ""),
       assignedToEmail: isTaskAdmin ? "" : (authUser?.email ?? ""),
     });
@@ -287,22 +337,26 @@ export default function TasksPage() {
   }
 
   function closeAddTask() {
+    pendingAddTaskRef.current = null;
+    setIsAddTaskLocked(false);
     setIsAddTaskOpen(false);
     setAddTaskDraft(defaultAddTaskDraft);
   }
 
-  function submitAddTask(event: FormEvent<HTMLFormElement>) {
+  async function submitAddTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const title = addTaskDraft.title.trim();
     const assignedToEmail = (isTaskAdmin ? addTaskDraft.assignedToEmail : authUser?.email ?? "").trim().toLowerCase();
-    if (!title || !assignedToEmail) return;
+    if (!title || !assignedToEmail || isSavingTask) return;
 
-    const newTask: TaskEntry = {
+    // Keep the whole payload stable: the server fingerprints timestamps and position too.
+    const newTask: TaskEntry = pendingAddTaskRef.current?.task ?? {
       id: createTaskId(),
       title,
       description: addTaskDraft.description.trim() || undefined,
       assignedTo: addTaskDraft.assignedTo.trim(),
       assignedToEmail,
+      assignedByEmail: authUser?.email.toLowerCase() || "local@example.com",
       priority: addTaskDraft.priority,
       status: addTaskDraft.status,
       dueDate: addTaskDraft.dueDate || undefined,
@@ -313,15 +367,24 @@ export default function TasksPage() {
       updatedBy: updaterName,
       version: 1,
     };
-    setTaskBoard((current) => ({
-      ...current,
-      [addTaskDraft.status]: [...current[addTaskDraft.status], newTask],
-    }));
-    createTask(newTask, updaterName).catch((error) => setSyncMessage(`Task save failed: ${error.message}`));
-    closeAddTask();
+    const requestId = pendingAddTaskRef.current?.requestId ?? createTaskId();
+    pendingAddTaskRef.current = { task: newTask, requestId };
+    setIsAddTaskLocked(true);
+    setIsSavingTask(true);
+    setAddTaskError("");
+    try {
+      const savedTask = await createTask(newTask, updaterName, requestId);
+      setTaskBoard((current) => groupTasksByStatus([...Object.values(current).flat().filter((task) => task.id !== savedTask.id), savedTask]));
+      closeAddTask();
+    } catch (error) {
+      setAddTaskError(error instanceof Error ? error.message : "Task could not be saved.");
+    } finally {
+      setIsSavingTask(false);
+    }
   }
 
   function openEditTask(task: TaskEntry) {
+    setDueDateConfirmed(false);
     setSelectedTaskId(task.id);
     setEditTaskInitial({ ...task });
     setEditTaskDraft({ ...task });
@@ -342,9 +405,7 @@ export default function TasksPage() {
     if (!selectedTaskId || !editTaskInitial || !editTaskDraft || isSavingTask) return;
 
     const title = editTaskDraft.title.trim();
-    const assignedToEmail = isTaskAdmin
-      ? editTaskDraft.assignedToEmail.trim().toLowerCase()
-      : editTaskInitial.assignedToEmail;
+    const assignedToEmail = editAssignedToEmail;
     if (!title) {
       setEditConflict("Enter a task title before saving.");
       return;
@@ -354,28 +415,42 @@ export default function TasksPage() {
       return;
     }
 
+    const statusChanged = editTaskDraft.status !== editTaskInitial.status;
+    const isAssignee = !isTasksFirebaseConfigured || assignedToEmail === authUser?.email.toLowerCase();
+    const needsReview = editNeedsReview;
+    if (needsReview && isAssignee && (!dueDateConfirmed || !editTaskDraft.dueDate)) {
+      setEditConflict("Choose and confirm the due date for this status before saving.");
+      return;
+    }
+
+    if (editTaskDraft.status === "todo" && !canEditTodoDueDate && (editTaskDraft.dueDate ?? "") !== (editTaskInitial.dueDate ?? "")) {
+      setEditConflict("Only the assigner can change a To Do due date.");
+      return;
+    }
+
     const hasChanges = (["title", "description", "assignedTo", "assignedToEmail", "priority", "status", "dueDate"] as const)
       .some((field) => (editTaskDraft[field] ?? "") !== (editTaskInitial[field] ?? ""));
-    if (!hasChanges) {
+    if (!hasChanges && !(needsReview && dueDateConfirmed)) {
       dismissEditTask();
       return;
     }
 
-    const statusChanged = editTaskDraft.status !== editTaskInitial.status;
     const taskToSave: TaskEntry = {
       ...editTaskDraft,
       title,
       description: editTaskDraft.description?.trim() || undefined,
       assignedTo: editTaskDraft.assignedTo.trim(),
       assignedToEmail,
+      assignedByEmail: assignedToEmail !== editTaskInitial.assignedToEmail ? authUser?.email.toLowerCase() : editTaskInitial.assignedByEmail,
       dueDate: editTaskDraft.dueDate || undefined,
+      dueDateReviewRequired: Boolean(needsReview && !(isAssignee && dueDateConfirmed)),
       position: statusChanged ? taskBoard[editTaskDraft.status].length : editTaskDraft.position,
     };
 
     setIsSavingTask(true);
     setEditConflict("");
     try {
-      const savedTask = await saveTask(taskToSave, editTaskInitial.version ?? 1, updaterName);
+      const savedTask = await saveTask(taskToSave, editTaskInitial.version ?? 1, updaterName, dueDateConfirmed);
       setTaskBoard((current) =>
         groupTasksByStatus(
           Object.values(current)
@@ -389,32 +464,38 @@ export default function TasksPage() {
         setEditConflict("Another editor changed this task. Reload the latest version before trying again.");
       } else {
         console.error("Task save failed:", error);
-        setEditConflict("This task could not be saved. Check your connection and try again.");
+        setEditConflict(error instanceof Error ? error.message : "This task could not be saved. Check your connection and try again.");
       }
     } finally {
       setIsSavingTask(false);
     }
   }
 
-  function handleDeleteTask() {
-    if (!selectedTaskId || !isTaskAdmin) return;
+  async function handleDeleteTask() {
+    if (!selectedTaskId || !editTaskInitial || !isTaskAdmin || isSavingTask) return;
     const idToDelete = selectedTaskId;
 
-    setTaskBoard((current) => {
-      const next = { ...current };
-      (Object.keys(next) as TaskStatus[]).forEach((status) => {
-        next[status] = next[status].filter((task) => task.id !== idToDelete);
-      });
-      return next;
-    });
-    deleteTask(idToDelete).catch((error) => setSyncMessage(`Delete failed: ${error.message}`));
-    dismissEditTask();
+    setIsSavingTask(true);
+    try {
+      await deleteTask(idToDelete, editTaskInitial.version ?? 1);
+      setTaskBoard((current) => groupTasksByStatus(Object.values(current).flat().filter((task) => task.id !== idToDelete)));
+      dismissEditTask();
+    } catch (error) {
+      setEditConflict(error instanceof Error ? error.message : "Task could not be deleted.");
+    } finally {
+      setIsSavingTask(false);
+    }
   }
 
-  function moveTask(fromStatus: TaskStatus, toStatus: TaskStatus, id: string, targetId?: string) {
+  async function moveTask(fromStatus: TaskStatus, toStatus: TaskStatus, id: string, targetId?: string) {
     const current = taskBoard;
     const movedTask = current[fromStatus]?.find((task) => task.id === id);
-    if (!movedTask || targetId === id) return;
+    if (!movedTask || targetId === id || isSavingTask) return;
+    if (fromStatus !== toStatus) {
+      openEditTask(movedTask);
+      setEditTaskDraft({ ...movedTask, status: toStatus });
+      return;
+    }
 
     const originalPosition = new Map<string, { position: number; status: TaskStatus; version: number }>();
     current[fromStatus].forEach((task) =>
@@ -464,11 +545,20 @@ export default function TasksPage() {
         }))
     );
 
-    setTaskBoard(nextByStatus);
     if (positionUpdates.length) {
-      saveTaskPositions(positionUpdates, updaterName).catch((error) =>
-        setSyncMessage(`Reorder failed: ${error.message}`)
-      );
+      setIsSavingTask(true);
+      try {
+        const saved = await saveTaskPositions(positionUpdates, updaterName);
+        const updates = new Map(saved.map((entry) => [entry.id, entry]));
+        setTaskBoard((current) => groupTasksByStatus(Object.values(current).flat().map((task) => {
+          const update = updates.get(task.id);
+          return update && update.version >= (task.version ?? 1) ? { ...task, ...update } : task;
+        })));
+      } catch (error) {
+        setSyncMessage(error instanceof Error ? error.message : "Reorder failed. Try again.");
+      } finally {
+        setIsSavingTask(false);
+      }
     }
   }
 
@@ -524,6 +614,12 @@ export default function TasksPage() {
             <button className="primary-action-button" onClick={() => openAddTask()}>+ New Task</button>
           </div>
 
+          {pendingEmails.length ? (
+            <div className="tasks-sync-message" role="status">
+              Tasks saved. {pendingEmails.length} email notification(s) {pendingEmails.some((item) => item.expired) ? "need administrator attention" : "are waiting to send"}.
+              {pendingEmails.some((item) => !item.expired) ? <button type="button" className="nav-button" disabled={isRetryingEmail} onClick={retryEmails}>{isRetryingEmail ? "Retrying…" : "Retry email"}</button> : null}
+            </div>
+          ) : null}
           {syncMessage ? <p className="tasks-sync-message" role="alert">{syncMessage}</p> : null}
           {memberDirectoryMessage ? <p className="tasks-sync-message" role="alert">{memberDirectoryMessage}</p> : null}
 
@@ -579,8 +675,18 @@ export default function TasksPage() {
                             <span className={`priority-badge priority-badge-${task.priority}`}>
                               {priorityLabels[task.priority]}
                             </span>
+                            {isOverdue(task) ? (
+                              <span className="task-overdue-badge">
+                                <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <path d="M12 3 2 21h20L12 3Z" />
+                                  <path d="M12 9v5m0 3h.01" />
+                                </svg>
+                                Overdue
+                              </span>
+                            ) : null}
                             <span className="task-card-title">{task.title}</span>
                             {task.assignedTo ? <span className="task-card-assignee">{task.assignedTo}</span> : null}
+                            {task.dueDateReviewRequired && task.status !== "done" ? <span className="task-card-due">Due date needs your review</span> : null}
                             {task.dueDate ? (
                               <span className="task-card-due">
                                 Due {task.dueDate}
@@ -618,13 +724,14 @@ export default function TasksPage() {
           )}
 
           {isAddTaskOpen ? (
-            <div className="modal-backdrop" role="presentation" onMouseDown={closeAddTask}>
+            <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!isSavingTask) closeAddTask(); }}>
               <div className="task-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
                 <h2>New Task</h2>
                 <form onSubmit={submitAddTask}>
                   <label className="modal-field">
                     Title
                     <input
+                      disabled={isAddTaskLocked}
                       value={addTaskDraft.title}
                       onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, title: event.target.value }))}
                       required
@@ -634,6 +741,7 @@ export default function TasksPage() {
                   <label className="modal-field">
                     Description
                     <textarea
+                      disabled={isAddTaskLocked}
                       value={addTaskDraft.description}
                       onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, description: event.target.value }))}
                     />
@@ -643,6 +751,7 @@ export default function TasksPage() {
                       <label className="modal-field">
                         Assignee
                         <select
+                          disabled={isAddTaskLocked}
                           required
                           value={addTaskDraft.assignedToEmail}
                           onChange={(event) => {
@@ -667,6 +776,7 @@ export default function TasksPage() {
                     <label className="modal-field">
                       Assignee
                       <input
+                        disabled={isAddTaskLocked}
                         value={addTaskDraft.assignedTo}
                         onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, assignedTo: event.target.value }))}
                       />
@@ -677,6 +787,7 @@ export default function TasksPage() {
                     <label className="modal-field">
                       Priority
                       <select
+                        disabled={isAddTaskLocked}
                         value={addTaskDraft.priority}
                         onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, priority: event.target.value as TaskPriority }))}
                       >
@@ -688,8 +799,9 @@ export default function TasksPage() {
                     <label className="modal-field">
                       Status
                       <select
+                        disabled={isAddTaskLocked}
                         value={addTaskDraft.status}
-                        onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, status: event.target.value as TaskStatus }))}
+                        onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, status: event.target.value as TaskStatus, dueDate: event.target.value === "todo" && !draft.dueDate ? suggestedDueDate() : draft.dueDate }))}
                       >
                         {statusConfig.map((status) => (
                           <option key={status.key} value={status.key}>{status.title}</option>
@@ -699,15 +811,17 @@ export default function TasksPage() {
                     <label className="modal-field">
                       Due date
                       <input
+                        disabled={isAddTaskLocked}
                         type="date"
                         value={addTaskDraft.dueDate}
                         onChange={(event) => setAddTaskDraft((draft) => ({ ...draft, dueDate: event.target.value }))}
                       />
                     </label>
                   </div>
+                  {addTaskError ? <p className="tasks-sync-message" role="alert">{addTaskError} Retry to confirm this submission, or cancel to start a new draft.</p> : null}
                   <div className="record-modal-actions">
-                    <button type="button" className="secondary-action-button" onClick={closeAddTask}>Cancel</button>
-                    <button type="submit" className="primary-action-button">Add Task</button>
+                    <button type="button" className="secondary-action-button" onClick={closeAddTask} disabled={isSavingTask}>Cancel</button>
+                    <button type="submit" className="primary-action-button" disabled={isSavingTask}>{isSavingTask ? "Saving…" : "Add Task"}</button>
                   </div>
                 </form>
               </div>
@@ -743,6 +857,7 @@ export default function TasksPage() {
                           value={editTaskDraft.assignedToEmail}
                           onChange={(event) => {
                             const member = taskMembers.find((candidate) => candidate.email === event.target.value);
+                            setDueDateConfirmed(false);
                             setEditTaskDraft((draft) => draft && ({
                               ...draft,
                               assignedTo: member?.name || member?.email || "",
@@ -790,7 +905,7 @@ export default function TasksPage() {
                       Status
                       <select
                         value={editTaskDraft.status}
-                        onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, status: event.target.value as TaskStatus })}
+                        onChange={(event) => { setDueDateConfirmed(false); setEditTaskDraft((draft) => draft && { ...draft, status: event.target.value as TaskStatus }); }}
                       >
                         {statusConfig.map((status) => (
                           <option key={status.key} value={status.key}>{status.title}</option>
@@ -801,13 +916,27 @@ export default function TasksPage() {
                       Due date
                       <input
                         type="date"
+                        disabled={editTaskDraft.status === "todo" && !canEditTodoDueDate}
                         value={editTaskDraft.dueDate ?? ""}
                         onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, dueDate: event.target.value })}
                       />
                     </label>
                   </div>
 
-                  <div className="record-modal-actions edit-modal-actions">
+                  {editTaskDraft.status === "todo" ? <p className="tasks-assignee-note">Only the assigner can change the To Do due date.</p> : null}
+                  {editNeedsReview ? (
+                    <div className="task-date-review">
+                      <p className="task-date-review-title">Review the due date</p>
+                      {!isTasksFirebaseConfigured || editAssignedToEmail === authUser?.email.toLowerCase() ? (
+                        <label className="task-date-review-check">
+                          <input type="checkbox" checked={dueDateConfirmed} onChange={(event) => setDueDateConfirmed(event.target.checked)} />
+                          <span>I have reviewed and confirmed this due date.</span>
+                        </label>
+                      ) : <p className="task-date-review-note">The assignee will be prompted to confirm a due date.</p>}
+                    </div>
+                  ) : null}
+
+                  <div className="record-modal-actions task-edit-actions">
                     {isTaskAdmin && isConfirmingDelete ? (
                       <>
                         <span className="tasks-delete-confirm-label">Delete this task?</span>
@@ -821,14 +950,14 @@ export default function TasksPage() {
                     ) : (
                       <>
                         {isTaskAdmin ? (
-                          <button type="button" className="danger-confirm-button" onClick={() => setIsConfirmingDelete(true)} disabled={isSavingTask}>
+                          <button type="button" className="task-delete-action" onClick={() => setIsConfirmingDelete(true)} disabled={isSavingTask}>
                             Delete
                           </button>
                         ) : null}
-                        <span className="modal-save-status">{isSavingTask ? "Saving…" : "Changes are checked before saving"}</span>
+                        <span className="task-actions-spacer" />
                         <button type="button" className="secondary-action-button" onClick={dismissEditTask} disabled={isSavingTask}>Cancel</button>
                         <button type="submit" className="primary-action-button" disabled={isSavingTask}>
-                          {isSavingTask ? "Saving…" : "Save Changes"}
+                          {isSavingTask ? "Saving…" : "Save changes"}
                         </button>
                       </>
                     )}
