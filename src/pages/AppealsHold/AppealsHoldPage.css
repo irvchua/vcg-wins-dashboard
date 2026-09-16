@@ -81,6 +81,32 @@
 .appeals-hold-badge-red { background: #d93636; color: white; }
 .appeals-hold-badge-empty { background: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.5); }
 
+.appeals-hold-status-select {
+  appearance: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  padding-right: 24px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2.5 4.5 3.5 3.5 3.5-3.5' fill='none' stroke='currentColor' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 10px;
+}
+
+.appeals-hold-status-select:hover {
+  filter: brightness(1.08);
+}
+
+.appeals-hold-status-select:focus-visible {
+  outline: 2px solid #f8d26a;
+  outline-offset: 2px;
+}
+
+.appeals-hold-status-select:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .appeals-hold-table th:nth-child(2),
 .appeals-hold-table td:nth-child(2) {
   width: 210px;

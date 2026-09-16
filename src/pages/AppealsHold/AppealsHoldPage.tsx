@@ -94,6 +94,7 @@ export default function AppealsHoldPage() {
   const [editInitial, setEditInitial] = useState<AppealHoldEntry | null>(null);
   const [editConflict, setEditConflict] = useState("");
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [savingStatusId, setSavingStatusId] = useState<number | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
@@ -270,6 +271,26 @@ export default function AppealsHoldPage() {
     }
   }
 
+  async function handleQuickStatusChange(entry: AppealHoldEntry, nextStatus: HoldStatus) {
+    if (nextStatus === entry.holdStatus || savingStatusId !== null) return;
+
+    setSavingStatusId(entry.id);
+    setSyncMessage("");
+    try {
+      const saved = await saveAppealRecord({ ...entry, holdStatus: nextStatus }, entry.version ?? 1, updaterName);
+      setEntries((current) => current.map((item) => (item.id === saved.id ? saved : item)));
+    } catch (error) {
+      if (error instanceof RecordConflictError) {
+        setSyncMessage("Another editor changed this row. Reload the page to see the latest version.");
+      } else {
+        console.error("Quick status update failed:", error);
+        setSyncMessage("Status update failed. Check your connection and try again.");
+      }
+    } finally {
+      setSavingStatusId(null);
+    }
+  }
+
   return (
     <main className="tasks-shell appeals-hold-shell">
       <div className="tasks-top-bar">
@@ -347,7 +368,19 @@ export default function AppealsHoldPage() {
                         onClick={() => openEditRecord(entry)}
                       >
                         <td>{entry.vetName}</td>
-                        <td><span className={getHoldStatusBadgeClass(entry.holdStatus)}>{entry.holdStatus || "—"}</span></td>
+                        <td onClick={(event) => event.stopPropagation()}>
+                          <select
+                            className={`appeals-hold-status-select ${getHoldStatusBadgeClass(entry.holdStatus)}`}
+                            value={entry.holdStatus}
+                            disabled={savingStatusId === entry.id}
+                            aria-label={`On hold status for ${entry.vetName}`}
+                            onChange={(event) => handleQuickStatusChange(entry, event.target.value as HoldStatus)}
+                          >
+                            {holdStatusOptions.map((status) => (
+                              <option key={status || "none"} value={status}>{status || "—"}</option>
+                            ))}
+                          </select>
+                        </td>
                         <td>{entry.reasonOnHold || "—"}</td>
                         <td>{entry.instructionDate || "—"}</td>
                         <td>{entry.decisionLetterLinkOrDate || "—"}</td>
