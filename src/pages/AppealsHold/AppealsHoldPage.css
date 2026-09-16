@@ -56,20 +56,237 @@
   padding: 24px 12px;
 }
 
-.badge {
-  display: inline-block;
-  padding: 3px 9px;
+.appeals-hold-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: max-content;
+  max-width: 100%;
+  padding: 4px 10px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.02em;
-  white-space: nowrap;
+  line-height: 1.35;
+  text-align: center;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
-.badge-green { background: #11864e; color: white; }
-.badge-yellow { background: #ffe083; color: #3d2b00; }
-.badge-blue { background: #0b63b6; color: white; }
-.badge-sky { background: #b9e2ff; color: #0061a8; }
-.badge-red { background: #d93636; color: white; }
-.badge-empty { background: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.5); }
+.appeals-hold-badge-green { background: #11864e; color: white; }
+.appeals-hold-badge-yellow { background: #ffe083; color: #3d2b00; }
+.appeals-hold-badge-blue { background: #0b63b6; color: white; }
+.appeals-hold-badge-sky { background: #b9e2ff; color: #0061a8; }
+.appeals-hold-badge-red { background: #d93636; color: white; }
+.appeals-hold-badge-empty { background: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.5); }
+
+.appeals-hold-table th:nth-child(2),
+.appeals-hold-table td:nth-child(2) {
+  width: 210px;
+  min-width: 210px;
+}
+
+.appeals-hold-shell .task-modal-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.appeals-hold-shell .modal-field {
+  min-width: 0;
+}
+
+.appeals-hold-shell .appeals-hold-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(640px, 100%);
+  max-height: min(820px, calc(100vh - 40px));
+  max-height: min(820px, calc(100dvh - 40px));
+  overflow: hidden;
+}
+
+.appeals-hold-modal > h2 {
+  flex-shrink: 0;
+}
+
+.appeals-hold-modal > form {
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 0;
+}
+
+.appeals-hold-modal-body {
+  --scroll-track: #1b2331;
+  --scroll-thumb: #75839a;
+  --scroll-thumb-hover: #b0bdd1;
+  --scroll-thumb-active: #f8d26a;
+  --scroll-button-hover: #303d51;
+  --scroll-button-active: #46546a;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 12px 16px 2px;
+  scrollbar-gutter: stable;
+}
+
+.appeals-hold-modal-body,
+.appeals-hold-modal-body textarea {
+  /* Let the explicit WebKit track render instead of the OS overlay scrollbar. */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+
+.appeals-hold-modal-body textarea {
+  --scroll-track: #e1e5eb;
+  --scroll-thumb: #8a96a7;
+  --scroll-thumb-hover: #596b83;
+  --scroll-thumb-active: #9a751e;
+  --scroll-button-hover: #ccd4df;
+  --scroll-button-active: #bbc7d7;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .appeals-hold-modal-body,
+  .appeals-hold-modal-body textarea {
+    scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+  }
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar,
+.appeals-hold-modal-body textarea::-webkit-scrollbar {
+  width: 16px;
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-button,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-button {
+  display: none;
+  height: 20px;
+  border: 3px solid var(--scroll-track);
+  border-radius: 7px;
+  background-color: var(--scroll-track);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 8px;
+  cursor: pointer;
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-button:vertical:decrement:start,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-button:vertical:decrement:start {
+  display: block;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2 8 4-4 4 4' fill='none' stroke='%23d6def0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-button:vertical:increment:end,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-button:vertical:increment:end {
+  display: block;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2 4 4 4 4-4' fill='none' stroke='%23d6def0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.appeals-hold-modal-body textarea::-webkit-scrollbar-button:vertical:decrement:start {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2 8 4-4 4 4' fill='none' stroke='%23526079' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.appeals-hold-modal-body textarea::-webkit-scrollbar-button:vertical:increment:end {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2 4 4 4 4-4' fill='none' stroke='%23526079' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-button:hover,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-button:hover {
+  background-color: var(--scroll-button-hover);
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-button:active,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-button:active {
+  background-color: var(--scroll-button-active);
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-track,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-track {
+  background: var(--scroll-track);
+  border-radius: 12px;
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-thumb,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-thumb {
+  min-height: 28px;
+  background: var(--scroll-thumb);
+  border: 3px solid var(--scroll-track);
+  border-radius: 12px;
+  cursor: grab;
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-thumb:hover,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-thumb:active,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-thumb:active {
+  background: var(--scroll-thumb-active);
+  cursor: grabbing;
+}
+
+.appeals-hold-modal-body::-webkit-scrollbar-corner,
+.appeals-hold-modal-body textarea::-webkit-scrollbar-corner {
+  background: var(--scroll-track);
+}
+
+.appeals-hold-modal-footer {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.appeals-hold-modal-footer .record-modal-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.appeals-hold-modal-footer .record-modal-actions > * {
+  flex: initial;
+}
+
+.appeals-hold-modal-footer .task-actions-spacer {
+  flex: 1;
+}
+
+.appeals-hold-modal-footer button {
+  min-height: 44px;
+}
+
+.appeals-hold-modal-footer p {
+  margin: 0;
+}
+
+@media (max-width: 600px) {
+  .appeals-hold-shell .task-modal-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .appeals-hold-modal-footer .record-modal-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .appeals-hold-modal-footer .task-actions-spacer {
+    display: none;
+  }
+
+  .appeals-hold-modal-footer .task-delete-action,
+  .appeals-hold-modal-footer .tasks-delete-confirm-label {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .appeals-hold-modal-footer button {
+    white-space: normal;
+  }
+}
