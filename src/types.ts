@@ -53,3 +53,28 @@ export type TaskEntry = {
   updatedBy?: string;
   version?: number;
 };
+
+export type HoldStatus =
+  | ""
+  | "UNRESPONSIVE"
+  | "REINSTATED"
+  | "DONE"
+  | "ACTION NEEDED"
+  | "WAITING/REEVALUATION"
+  | "NOT INTERESTED";
+
+export type AppealHoldEntry = {
+  id: number;
+  vetName: string;
+  holdStatus: HoldStatus;
+  reasonOnHold: string;
+  instructionDate: string;
+  decisionLetterLinkOrDate: string;
+  notes: string;
+  actionNeeded: string;
+  notesOnHoldStatus: string;
+  position?: number;
+  updatedAt?: string;
+  updatedBy?: string;
+  version?: number;
+};

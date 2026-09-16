@@ -1,12 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import "./WinsBoardPage.css";
-import {
-  canUserEdit,
-  signInWithGoogle,
-  signOutUser,
-  subscribeToAuth,
-  type AuthUser,
-} from "../../lib/firebase/auth";
+import { useAuthUser } from "../../components/authContext";
+import { canUserEdit, isFirebaseAppConfigured, signOutUser } from "../../lib/firebase/auth";
 import {
   createBoardRecord,
   isDemoMode,
@@ -21,6 +16,7 @@ import {
   subscribeToBoard,
   updateRecordState,
 } from "../../lib/firebase/winsBoard";
+import { createBoardStorage } from "../../lib/boardStorage";
 import type { ActivityEntry, ArchivedEntry, BoardEntry, BoardState, StageKey, StatusLabel } from "../../types";
 
 type StageConfigItem = {
@@ -45,6 +41,7 @@ type WinsAnimation = {
   id: number;
 };
 
+const boardStorage = createBoardStorage(!isFirebaseAppConfigured || isDemoMode);
 const STORAGE_NAMESPACE = isDemoMode ? "vcg-demo" : "vcg";
 const STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-board-data`;
 const ARCHIVED_STORAGE_KEY = `${STORAGE_NAMESPACE}-wins-board-archive`;
@@ -88,55 +85,7 @@ const defaultAddRecordDraft: AddRecordDraft = {
   status: "",
 };
 
-const initialBoard: BoardState = {
-  appeals: [
-    { id: 1, name: "Alan Cain", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 2, name: "Reginald Mccoy", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 3, name: "Derek Kelly", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 4, name: "Christopher Cheramie", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 5, name: "Suphakit Areeyat", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 6, name: "Lavalle Jenkins", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 7, name: "Gavriel Hudson", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 8, name: "Mercedes Pratt", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 9, name: "Thomas Dezell", assignedTo: "", adminInCharge: "", status: "" },
-  ],
-  claims526: [
-    { id: 10, name: "Douglas Kramer", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 11, name: "Aurelio Cuervo", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 12, name: "Gary Watson", assignedTo: "", adminInCharge: "", status: "UNDER QA REVIEW" },
-    { id: 13, name: "Freddie Gonzales", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 14, name: "Juan Ocampo", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 15, name: "Elvis Thien", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 16, name: "Michael Johnson", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 17, name: "Jeffrey Mota", assignedTo: "", adminInCharge: "", status: "ON PROCESS" },
-    { id: 18, name: "Dennis Robinson", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 19, name: "Jamar Harrison", assignedTo: "", adminInCharge: "", status: "" },
-    { id: 20, name: "Rey Thompson", assignedTo: "", adminInCharge: "", status: "" },
-  ],
-  reviewSignature: [
-    { id: 21, name: "Wilson Warner", assignedTo: "", adminInCharge: "", status: "CLAIMS" },
-    { id: 22, name: "Shing-Chit Chuang", assignedTo: "", adminInCharge: "", status: "CLAIMS" },
-    { id: 23, name: "Isaac Contreras", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 24, name: "Quinn Lacey", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 25, name: "Anthony Davis", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-  ],
-  faxing: [{ id: 26, name: "Issiah Johnson", assignedTo: "", adminInCharge: "", status: "CLAIMS" }],
-  faxed: [
-    { id: 27, name: "Louis Collins", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 28, name: "Jason Moore", assignedTo: "", adminInCharge: "", status: "CLAIMS" },
-    { id: 29, name: "Dennis Robinson", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 30, name: "Anthony Hale", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 31, name: "Antiuwan Jones", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 32, name: "Philip Edgar", assignedTo: "", adminInCharge: "", status: "CLAIMS" },
-    { id: 33, name: "Tristian Blaney", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 34, name: "Brandon Black", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 35, name: "Keith Genereux", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 36, name: "Dake Hamilton", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 37, name: "Eddian Edwards", assignedTo: "", adminInCharge: "", status: "APPEALS" },
-    { id: 38, name: "Irving Scales Sr.", assignedTo: "", adminInCharge: "", status: "CLAIMS" },
-    { id: 39, name: "Elijah Stroh", assignedTo: "", adminInCharge: "", status: "" },
-  ],
-};
+
 
 function createDemoBoard(): BoardState {
   const timestamp = (daysAgo: number) =>
@@ -296,9 +245,9 @@ function normalizeArchivedEntries(entries: Partial<ArchivedEntry>[] = []): Archi
 }
 
 function loadInitialBoard(): BoardState {
-  const fallbackBoard = isDemoMode ? createDemoBoard() : initialBoard;
+  const fallbackBoard = isDemoMode ? createDemoBoard() : emptyBoard;
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = boardStorage.getItem(STORAGE_KEY);
     return saved ? normalizeBoard(JSON.parse(saved)) : fallbackBoard;
   } catch {
     return fallbackBoard;
@@ -307,7 +256,7 @@ function loadInitialBoard(): BoardState {
 
 function loadInitialArchivedEntries(): ArchivedEntry[] {
   try {
-    const saved = localStorage.getItem(ARCHIVED_STORAGE_KEY);
+    const saved = boardStorage.getItem(ARCHIVED_STORAGE_KEY);
     return saved ? normalizeArchivedEntries(JSON.parse(saved)) : [];
   } catch {
     return [];
@@ -315,15 +264,15 @@ function loadInitialArchivedEntries(): ArchivedEntry[] {
 }
 
 function loadInitialWins(): number {
-  const savedWins = localStorage.getItem(WINS_STORAGE_KEY);
-  return savedWins ? Number(savedWins) : isDemoMode ? 8 : 104;
+  const savedWins = boardStorage.getItem(WINS_STORAGE_KEY);
+  return savedWins ? Number(savedWins) : isDemoMode ? 8 : 0;
 }
 
 function loadInitialWinsTarget(): string {
-  const savedTarget = localStorage.getItem(WINS_TARGET_STORAGE_KEY);
+  const savedTarget = boardStorage.getItem(WINS_TARGET_STORAGE_KEY);
   if (savedTarget !== null) return savedTarget;
 
-  const legacyTarget = localStorage.getItem(LEGACY_WINS_TARGET_STORAGE_KEY);
+  const legacyTarget = boardStorage.getItem(LEGACY_WINS_TARGET_STORAGE_KEY);
   return legacyTarget === "0" ? "" : legacyTarget ?? "";
 }
 
@@ -341,7 +290,7 @@ function normalizeWinsTargetEditorValue(value: string, fallback: string): string
 
 function loadInitialActivities(): ActivityEntry[] {
   try {
-    const saved = localStorage.getItem(ACTIVITY_STORAGE_KEY);
+    const saved = boardStorage.getItem(ACTIVITY_STORAGE_KEY);
     return saved ? JSON.parse(saved) : [];
   } catch {
     return [];
@@ -397,13 +346,12 @@ export default function WinsBoardPage() {
   const [loadedAssetCount, setLoadedAssetCount] = useState(0);
   const [assetLoadAttempt, setAssetLoadAttempt] = useState(0);
   const [page, setPage] = useState<"tv" | "admin">("tv");
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(isFirebaseConfigured);
+  const authUser = useAuthUser();
   const [isRemoteReady, setIsRemoteReady] = useState(!isFirebaseConfigured);
   const [areTvControlsVisible, setAreTvControlsVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [hasRemoteLegacyBoard, setHasRemoteLegacyBoard] = useState(false);
-  const [authError, setAuthError] = useState("");
+  const [signOutError, setSignOutError] = useState("");
   const [syncStatus, setSyncStatus] = useState(
     isDemoMode ? "Demo mode - local data only" : isFirebaseConfigured ? "Connecting to Firebase..." : "Local backup only"
   );
@@ -570,19 +518,6 @@ export default function WinsBoardPage() {
   }, [isWinsTargetDirty, winsTarget]);
 
   useEffect(() => {
-    if (!isFirebaseConfigured) {
-      return;
-    }
-
-    const unsubscribe = subscribeToAuth((user) => {
-      setAuthUser(user);
-      setIsAuthLoading(false);
-    });
-
-    return () => unsubscribe?.();
-  }, []);
-
-  useEffect(() => {
     if (!isFirebaseConfigured) return;
 
     const unsubscribe = subscribeToBoard(
@@ -603,14 +538,14 @@ export default function WinsBoardPage() {
 
           if (!shouldSeedMissingFirebaseBoard) {
             lastRemotePayload.current = localPayload;
-            setSyncStatus("Firebase board not found. Saving locally.");
+            setSyncStatus("Firebase board not found. Contact an administrator.");
             return;
           }
 
           lastRemotePayload.current = localPayload;
           saveBoardData(localWins, localWinsTarget, localActivities)
             .then(() => setSyncStatus("Synced with Firebase"))
-            .catch(() => setSyncStatus("Firebase unavailable. Saving locally."));
+            .catch(() => setSyncStatus("Firebase unavailable. Please reconnect to load saved data."));
           return;
         }
 
@@ -654,7 +589,7 @@ export default function WinsBoardPage() {
       (error) => {
         console.error("Firebase sync failed:", error);
         hasRemoteLoaded.current = true;
-        setSyncStatus("Firebase unavailable. Saving locally.");
+        setSyncStatus("Firebase unavailable. Please reconnect to load saved data.");
       }
     );
 
@@ -662,7 +597,7 @@ export default function WinsBoardPage() {
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify(activities));
+    boardStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify(activities));
   }, [activities]);
 
   useEffect(() => {
@@ -684,19 +619,19 @@ export default function WinsBoardPage() {
   }, [archivedEntries, authUser, board, hasRemoteLegacyBoard, isRemoteReady]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(board));
+    boardStorage.setItem(STORAGE_KEY, JSON.stringify(board));
   }, [board]);
 
   useEffect(() => {
-    localStorage.setItem(ARCHIVED_STORAGE_KEY, JSON.stringify(archivedEntries));
+    boardStorage.setItem(ARCHIVED_STORAGE_KEY, JSON.stringify(archivedEntries));
   }, [archivedEntries]);
 
   useEffect(() => {
-    localStorage.setItem(WINS_STORAGE_KEY, String(wins));
+    boardStorage.setItem(WINS_STORAGE_KEY, String(wins));
   }, [wins]);
 
   useEffect(() => {
-    localStorage.setItem(WINS_TARGET_STORAGE_KEY, String(winsTarget));
+    boardStorage.setItem(WINS_TARGET_STORAGE_KEY, String(winsTarget));
   }, [winsTarget]);
 
   useEffect(() => {
@@ -719,7 +654,7 @@ export default function WinsBoardPage() {
         })
         .catch((error) => {
           console.error("Firebase save failed:", error);
-          setSyncStatus("Firebase unavailable. Saving locally.");
+          setSyncStatus("Firebase unavailable. Please reconnect to load saved data.");
         });
     }, 350);
 
@@ -727,8 +662,6 @@ export default function WinsBoardPage() {
   }, [activities, authUser, wins, winsTarget]);
 
   const totalEntries = useMemo(() => getTotalEntries(board), [board]);
-  const canEditBoard = canUserEdit(authUser);
-  const showAuthGate = isFirebaseConfigured && (!authUser || !canEditBoard);
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const filteredBoard = useMemo(() => {
     if (!normalizedSearchQuery) return board;
@@ -1073,19 +1006,11 @@ export default function WinsBoardPage() {
     });
   }
 
-  function handleSignIn() {
-    setAuthError("");
-    signInWithGoogle().catch((error) => {
-      console.error("Google sign-in failed:", error);
-      setAuthError("Sign-in failed. Please try again.");
-    });
-  }
-
   function handleSignOut() {
-    setAuthError("");
+    setSignOutError("");
     signOutUser().catch((error) => {
       console.error("Sign-out failed:", error);
-      setAuthError("Sign-out failed. Please try again.");
+      setSignOutError("Sign-out failed. Please try again.");
     });
   }
 
@@ -1431,11 +1356,12 @@ export default function WinsBoardPage() {
               </button>
             </>
           ) : null}
-          {page === "admin" && authUser ? (
+          {authUser ? (
             <button className="nav-button sign-out-button" onClick={handleSignOut}>
               Sign Out
             </button>
           ) : null}
+          {signOutError ? <span className="auth-error">{signOutError}</span> : null}
         </div>
       </div>
 
@@ -1488,31 +1414,6 @@ export default function WinsBoardPage() {
             </div>
             <BoardTable board={board} now={now} />
           </div>
-        </div>
-      ) : showAuthGate ? (
-        <div className="auth-page">
-          <section className="auth-panel">
-            <img src="/vcg-logo.png" alt="Veterans Choice Global" className="auth-logo" />
-            <h1>Edit Board</h1>
-            {isAuthLoading ? (
-              <p>Checking access...</p>
-            ) : authUser ? (
-              <>
-                <p>This Google account does not have edit access. Please sign in with an approved work account.</p>
-                <button className="auth-button secondary" onClick={handleSignOut}>
-                  Sign out
-                </button>
-              </>
-            ) : (
-              <>
-                <p>Sign in with an approved Google account to update records.</p>
-                <button className="auth-button" onClick={handleSignIn}>
-                  Sign in with Google
-                </button>
-              </>
-            )}
-            {authError ? <div className="auth-error">{authError}</div> : null}
-          </section>
         </div>
       ) : (
         <div className="admin-page">

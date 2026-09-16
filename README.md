@@ -56,11 +56,11 @@ Keep the matching environment value in Vercel for configuration visibility:
 VITE_AUTHORIZED_DOMAINS=jcmchcorp.com,veteranschoiceglobal.com
 ```
 
-The TV board remains viewable. The Edit Board view requires Google sign-in when Firebase is configured. Individual email exceptions and other domains are not accepted.
+All dashboard routes, including the TV board, require Google sign-in with an approved work account when Firebase is configured. Individual email exceptions and other domains are not accepted.
 
 ## Progress Board: Firebase persistence
 
-Board metadata is stored in `winsBoards/{boardId}` and each record is stored independently in the `winsBoards/{boardId}/records` subcollection. Existing single-document board data is migrated automatically the first time an approved editor opens the board after this version is deployed. It still writes a local backup to `localStorage`.
+Board metadata is stored in `winsBoards/{boardId}` and each record is stored independently in the `winsBoards/{boardId}/records` subcollection. Existing single-document board data is migrated automatically the first time an approved editor opens the board after this version is deployed. Firebase-backed boards do not read or write board records, archives, activity, or metrics in `localStorage`. Older board caches are cleared at app startup and sign-out. Browser persistence is limited to demo mode and development with no Firebase app configured.
 
 Record edits use version-checked Firestore transactions. If another editor updates the same record while an edit modal is open, the stale save is rejected and the editor is prompted to reload the latest version.
 

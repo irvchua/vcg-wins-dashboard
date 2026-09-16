@@ -23,7 +23,7 @@ service cloud.firestore {
     }
 
     match /winsBoards/{boardId} {
-      allow read: if true;
+      allow read: if approvedEditor();
       allow create: if approvedEditor()
         && (!request.resource.data.keys().hasAny(['announcement']) || (
           announcementEditor()
@@ -38,7 +38,17 @@ service cloud.firestore {
         ));
 
       match /records/{recordId} {
-        allow read: if true;
+        allow read: if approvedEditor();
+        allow write: if approvedEditor();
+      }
+    }
+
+    match /appealsHoldBoards/{boardId} {
+      allow read: if approvedEditor();
+      allow create, update: if approvedEditor();
+
+      match /records/{recordId} {
+        allow read: if approvedEditor();
         allow write: if approvedEditor();
       }
     }
