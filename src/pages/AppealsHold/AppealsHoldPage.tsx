@@ -48,17 +48,17 @@ function getHoldStatusBadgeClass(status: HoldStatus): string {
   switch (status) {
     case "REINSTATED":
     case "DONE":
-      return "badge badge-green";
+      return "appeals-hold-badge appeals-hold-badge-green";
     case "ACTION NEEDED":
-      return "badge badge-yellow";
+      return "appeals-hold-badge appeals-hold-badge-yellow";
     case "UNRESPONSIVE":
-      return "badge badge-red";
+      return "appeals-hold-badge appeals-hold-badge-red";
     case "WAITING/REEVALUATION":
-      return "badge badge-blue";
+      return "appeals-hold-badge appeals-hold-badge-blue";
     case "NOT INTERESTED":
-      return "badge badge-sky";
+      return "appeals-hold-badge appeals-hold-badge-sky";
     default:
-      return "badge badge-empty";
+      return "appeals-hold-badge appeals-hold-badge-empty";
   }
 }
 
@@ -94,6 +94,7 @@ export default function AppealsHoldPage() {
   const [editInitial, setEditInitial] = useState<AppealHoldEntry | null>(null);
   const [editConflict, setEditConflict] = useState("");
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [savingStatusId, setSavingStatusId] = useState<number | null>(null);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
@@ -270,8 +271,28 @@ export default function AppealsHoldPage() {
     }
   }
 
+  async function handleQuickStatusChange(entry: AppealHoldEntry, nextStatus: HoldStatus) {
+    if (nextStatus === entry.holdStatus || savingStatusId !== null) return;
+
+    setSavingStatusId(entry.id);
+    setSyncMessage("");
+    try {
+      const saved = await saveAppealRecord({ ...entry, holdStatus: nextStatus }, entry.version ?? 1, updaterName);
+      setEntries((current) => current.map((item) => (item.id === saved.id ? saved : item)));
+    } catch (error) {
+      if (error instanceof RecordConflictError) {
+        setSyncMessage("Another editor changed this row. Reload the page to see the latest version.");
+      } else {
+        console.error("Quick status update failed:", error);
+        setSyncMessage("Status update failed. Check your connection and try again.");
+      }
+    } finally {
+      setSavingStatusId(null);
+    }
+  }
+
   return (
-    <main className="tasks-shell">
+    <main className="tasks-shell appeals-hold-shell">
       <div className="tasks-top-bar">
         <Link to="/" className="tasks-back-link">
           ← Dashboard
@@ -347,7 +368,19 @@ export default function AppealsHoldPage() {
                         onClick={() => openEditRecord(entry)}
                       >
                         <td>{entry.vetName}</td>
-                        <td><span className={getHoldStatusBadgeClass(entry.holdStatus)}>{entry.holdStatus || "—"}</span></td>
+                        <td onClick={(event) => event.stopPropagation()}>
+                          <select
+                            className={`appeals-hold-status-select ${getHoldStatusBadgeClass(entry.holdStatus)}`}
+                            value={entry.holdStatus}
+                            disabled={savingStatusId === entry.id}
+                            aria-label={`On hold status for ${entry.vetName}`}
+                            onChange={(event) => handleQuickStatusChange(entry, event.target.value as HoldStatus)}
+                          >
+                            {holdStatusOptions.map((status) => (
+                              <option key={status || "none"} value={status}>{status || "—"}</option>
+                            ))}
+                          </select>
+                        </td>
                         <td>{entry.reasonOnHold || "—"}</td>
                         <td>{entry.instructionDate || "—"}</td>
                         <td>{entry.decisionLetterLinkOrDate || "—"}</td>
@@ -372,9 +405,10 @@ export default function AppealsHoldPage() {
 
       {isAddOpen ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={() => { if (!isSaving) closeAddRecord(); }}>
-          <div className="task-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="task-modal appeals-hold-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <h2>Add Row</h2>
             <form onSubmit={submitAddRecord}>
+              <div className="appeals-hold-modal-body" role="region" aria-label="Row details" tabIndex={0}>
               <div className="task-modal-row">
                 <label className="modal-field">
                   Vet Name
@@ -441,10 +475,13 @@ export default function AppealsHoldPage() {
                   onChange={(event) => setAddDraft((draft) => ({ ...draft, notesOnHoldStatus: event.target.value }))}
                 />
               </label>
+              </div>
+              <div className="appeals-hold-modal-footer">
               {addError ? <p className="tasks-sync-message" role="alert">{addError}</p> : null}
               <div className="record-modal-actions">
                 <button type="button" className="secondary-action-button" onClick={closeAddRecord} disabled={isSaving}>Cancel</button>
                 <button type="submit" className="primary-action-button" disabled={isSaving}>{isSaving ? "Saving…" : "Add Row"}</button>
+              </div>
               </div>
             </form>
           </div>
@@ -453,9 +490,10 @@ export default function AppealsHoldPage() {
 
       {editDraft ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={dismissEditRecord}>
-          <div className="task-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+          <div className="task-modal appeals-hold-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <h2>Edit Row</h2>
             <form onSubmit={submitEditRecord}>
+              <div className="appeals-hold-modal-body" role="region" aria-label="Row details" tabIndex={0}>
               <div className="task-modal-row">
                 <label className="modal-field">
                   Vet Name
@@ -522,6 +560,8 @@ export default function AppealsHoldPage() {
                 />
               </label>
 
+              </div>
+              <div className="appeals-hold-modal-footer">
               <div className="record-modal-actions task-edit-actions">
                 {isConfirmingDelete ? (
                   <>
@@ -560,6 +600,7 @@ export default function AppealsHoldPage() {
                   </button>
                 </div>
               ) : null}
+              </div>
             </form>
           </div>
         </div>
