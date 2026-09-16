@@ -2,13 +2,8 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import "../../styles/shared.css";
 import "./TasksPage.css";
-import {
-  canUserEdit,
-  signInWithGoogle,
-  signOutUser,
-  subscribeToAuth,
-  type AuthUser,
-} from "../../lib/firebase/auth";
+import { useAuthUser } from "../../components/authContext";
+import { canUserEdit, signOutUser } from "../../lib/firebase/auth";
 import {
   createTask,
   deleteTask,
@@ -119,9 +114,7 @@ function isOverdue(task: TaskEntry): boolean {
 }
 
 export default function TasksPage() {
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(isTasksFirebaseConfigured);
-  const [authError, setAuthError] = useState("");
+  const authUser = useAuthUser();
   const [isTaskAdmin, setIsTaskAdmin] = useState(!isTasksFirebaseConfigured);
   const [isAdminStatusLoading, setIsAdminStatusLoading] = useState(isTasksFirebaseConfigured);
   const [taskBoard, setTaskBoard] = useState<TaskBoardState>(emptyTaskBoard);
@@ -130,6 +123,7 @@ export default function TasksPage() {
     isTasksFirebaseConfigured ? [] : localModeTaskMembers
   );
   const [memberDirectoryMessage, setMemberDirectoryMessage] = useState("");
+  const [signOutError, setSignOutError] = useState("");
   const [pendingEmails, setPendingEmails] = useState<Array<{ receiptId: string; expired: boolean }>>([]);
   const [isRetryingEmail, setIsRetryingEmail] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
@@ -149,8 +143,6 @@ export default function TasksPage() {
   const hasInitializedBoard = useRef(false);
   const pendingAddTaskRef = useRef<{ task: TaskEntry; requestId: string } | null>(null);
 
-  const canEditTasks = canUserEdit(authUser);
-  const showAuthGate = isTasksFirebaseConfigured && (!authUser || !canEditTasks);
   const canEditTodoDueDate = !isTasksFirebaseConfigured || (editTaskInitial?.assignedByEmail
     ? editTaskInitial.assignedByEmail === authUser?.email.toLowerCase()
     : isTaskAdmin);
@@ -164,31 +156,15 @@ export default function TasksPage() {
       || editAssignedToEmail !== editTaskInitial.assignedToEmail));
 
   useEffect(() => {
-    if (!isTasksFirebaseConfigured) return;
+    if (!isTasksFirebaseConfigured || !authUser || !canUserEdit(authUser)) return;
 
-    const unsubscribe = subscribeToAuth((user) => {
-      const hasTaskAccess = Boolean(user && canUserEdit(user));
-      setAuthUser(user);
-      setTaskBoard(emptyTaskBoard);
-      setPendingEmails([]);
-      setTaskMembers([]);
-      setIsTaskAdmin(false);
-      setIsAdminStatusLoading(hasTaskAccess);
-      setIsBoardLoading(hasTaskAccess);
-      setSyncMessage("");
-      setMemberDirectoryMessage("");
-      setIsAuthLoading(false);
-      if (hasTaskAccess && user) {
-        registerTaskMember(user)
-          .then(() => setMemberDirectoryMessage(""))
-          .catch((error) => {
-            console.error("Task member registration failed:", error);
-            setMemberDirectoryMessage("Couldn't add you to the assignee directory. Try reloading the page.");
-          });
-      }
-    });
-    return () => unsubscribe?.();
-  }, []);
+    registerTaskMember(authUser)
+      .then(() => setMemberDirectoryMessage(""))
+      .catch((error) => {
+        console.error("Task member registration failed:", error);
+        setMemberDirectoryMessage("Couldn't add you to the assignee directory. Try reloading the page.");
+      });
+  }, [authUser]);
 
   useEffect(() => {
     if (!isTasksFirebaseConfigured || !authUser || !canUserEdit(authUser)) return;
@@ -306,19 +282,11 @@ export default function TasksPage() {
     ) as TaskBoardState;
   }, [isFiltering, normalizedSearchQuery, priorityFilter, taskBoard]);
 
-  function handleSignIn() {
-    setAuthError("");
-    signInWithGoogle().catch((error) => {
-      console.error("Google sign-in failed:", error);
-      setAuthError("Sign-in failed. Please try again.");
-    });
-  }
-
   function handleSignOut() {
-    setAuthError("");
+    setSignOutError("");
     signOutUser().catch((error) => {
       console.error("Sign-out failed:", error);
-      setAuthError("Sign-out failed. Please try again.");
+      setSignOutError("Sign-out failed. Please try again.");
     });
   }
 
@@ -585,16 +553,9 @@ export default function TasksPage() {
         </p>
       ) : null}
 
-      {isAuthLoading ? (
-        <p className="tasks-loading">Loading…</p>
-      ) : showAuthGate ? (
-        <div className="tasks-auth-gate">
-          <p>Sign in with an approved Google account to view and manage tasks.</p>
-          <button className="primary-action-button" onClick={handleSignIn}>Sign in with Google</button>
-          {authError ? <p className="tasks-auth-error" role="alert">{authError}</p> : null}
-        </div>
-      ) : (
-        <>
+      {signOutError ? <p className="tasks-auth-error" role="alert">{signOutError}</p> : null}
+
+      <>
           <div className="tasks-filter-bar">
             <input
               type="search"
@@ -980,8 +941,7 @@ export default function TasksPage() {
               </div>
             </div>
           ) : null}
-        </>
-      )}
+      </>
     </main>
   );
 }

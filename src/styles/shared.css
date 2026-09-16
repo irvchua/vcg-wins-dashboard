@@ -1,4 +1,4 @@
-/* Shared chrome for authenticated tool pages (Tasks, Task Access, and future tools):
+/* Shared chrome for authenticated tool pages (Tasks, Manage Admin Access, and future tools):
    page shell, top bar, auth gate, and modal/button primitives. */
 
 .tasks-shell {

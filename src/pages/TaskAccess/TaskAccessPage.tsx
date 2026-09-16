@@ -2,14 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import "../../styles/shared.css";
 import "./TaskAccessPage.css";
-import {
-  authorizedDomains,
-  canUserEdit,
-  signInWithGoogle,
-  signOutUser,
-  subscribeToAuth,
-  type AuthUser,
-} from "../../lib/firebase/auth";
+import { useAuthUser } from "../../components/authContext";
+import { authorizedDomains, canUserEdit, signOutUser } from "../../lib/firebase/auth";
 import {
   BOOTSTRAP_TASK_ADMIN_EMAIL,
   grantTaskAdmin,
@@ -20,9 +14,7 @@ import {
 } from "../../lib/firebase/tasks";
 
 export default function TaskAccessPage() {
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(isTasksFirebaseConfigured);
-  const [authError, setAuthError] = useState("");
+  const authUser = useAuthUser();
   const [isTaskAdmin, setIsTaskAdmin] = useState(!isTasksFirebaseConfigured);
   const [isAdminStatusLoading, setIsAdminStatusLoading] = useState(isTasksFirebaseConfigured);
   const [adminEmails, setAdminEmails] = useState<string[]>([]);
@@ -32,28 +24,9 @@ export default function TaskAccessPage() {
   const [isGranting, setIsGranting] = useState(false);
   const [confirmingRevoke, setConfirmingRevoke] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState("");
+  const [signOutError, setSignOutError] = useState("");
 
-  const canUseAccessPage = canUserEdit(authUser);
-  const showAuthGate = isTasksFirebaseConfigured && (!authUser || !canUseAccessPage);
   const updaterName = authUser?.name.trim() || "Local user";
-
-  useEffect(() => {
-    if (!isTasksFirebaseConfigured) return;
-
-    const unsubscribe = subscribeToAuth((user) => {
-      const hasTaskAccess = Boolean(user && canUserEdit(user));
-      setAuthUser(user);
-      setIsTaskAdmin(false);
-      setIsAdminStatusLoading(hasTaskAccess);
-      setAdminEmails([]);
-      setIsAdminsLoading(hasTaskAccess);
-      setConfirmingRevoke(null);
-      setActionMessage("");
-      setGrantError("");
-      setIsAuthLoading(false);
-    });
-    return () => unsubscribe?.();
-  }, []);
 
   useEffect(() => {
     if (!isTasksFirebaseConfigured || !authUser || !canUserEdit(authUser)) return;
@@ -93,19 +66,11 @@ export default function TaskAccessPage() {
     return () => unsubscribe?.();
   }, [isTaskAdmin]);
 
-  function handleSignIn() {
-    setAuthError("");
-    signInWithGoogle().catch((error) => {
-      console.error("Google sign-in failed:", error);
-      setAuthError("Sign-in failed. Please try again.");
-    });
-  }
-
   function handleSignOut() {
-    setAuthError("");
+    setSignOutError("");
     signOutUser().catch((error) => {
       console.error("Sign-out failed:", error);
-      setAuthError("Sign-out failed. Please try again.");
+      setSignOutError("Sign-out failed. Please try again.");
     });
   }
 
@@ -125,7 +90,7 @@ export default function TaskAccessPage() {
       return;
     }
     if (email === BOOTSTRAP_TASK_ADMIN_EMAIL || adminEmails.includes(email)) {
-      setGrantError("This account is already a task administrator.");
+      setGrantError("This account is already an administrator.");
       return;
     }
 
@@ -172,7 +137,7 @@ export default function TaskAccessPage() {
         ) : null}
       </div>
 
-      <h1>Manage Task Access</h1>
+      <h1>Manage Admin Access</h1>
 
       {!isTasksFirebaseConfigured ? (
         <p className="tasks-config-warning">
@@ -180,24 +145,18 @@ export default function TaskAccessPage() {
         </p>
       ) : null}
 
-      {isAuthLoading ? (
-        <p className="tasks-loading">Loading…</p>
-      ) : showAuthGate ? (
-        <div className="tasks-auth-gate">
-          <p>Sign in with an approved Google account to continue.</p>
-          <button className="primary-action-button" onClick={handleSignIn}>Sign in with Google</button>
-          {authError ? <p className="tasks-auth-error" role="alert">{authError}</p> : null}
-        </div>
-      ) : isAdminStatusLoading ? (
+      {signOutError ? <p className="tasks-auth-error" role="alert">{signOutError}</p> : null}
+
+      {isAdminStatusLoading ? (
         <p className="tasks-loading">Checking access…</p>
       ) : !isTaskAdmin ? (
         <div className="tasks-auth-gate">
-          <p>Only task administrators can manage access. Ask an existing administrator to grant you access.</p>
+          <p>Only administrators can manage access. Ask an existing administrator to grant you access.</p>
         </div>
       ) : (
         <>
           <section className="task-access-section">
-            <h2>Task administrators</h2>
+            <h2>Administrators</h2>
             <ul className="task-access-list">
               <li className="task-access-row">
                 <span>{BOOTSTRAP_TASK_ADMIN_EMAIL}</span>

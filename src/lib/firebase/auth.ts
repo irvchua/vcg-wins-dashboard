@@ -1,4 +1,5 @@
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
+import { clearLegacyBoardStorage } from "../boardStorage";
 import {
   getAuth,
   GoogleAuthProvider,
@@ -109,4 +110,5 @@ export async function signOutUser() {
   if (!auth) return;
 
   await signOut(auth);
+  clearLegacyBoardStorage();
 }
