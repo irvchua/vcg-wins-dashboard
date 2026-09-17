@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import handler from "../api/tasks.js";
 import { prepareTask } from "../server/task-policy.js";
 import { mutateTask, deliverNotification } from "../server/task-service.js";
+import {
+  TaskRequestError,
+  discardRejectedFollowUpRequest,
+  followUpRequestKey,
+  pendingFollowUpRequests,
+} from "../src/lib/firebase/taskRequests.ts";
 
 const user = { uid: "assignee", email: "person@veteranschoiceglobal.com", email_verified: true, name: "Person" };
 const admin = { uid: "admin", email: "admin@veteranschoiceglobal.com", email_verified: true };
@@ -62,6 +68,48 @@ test("atomic save records one email; duplicate request does not mutate again", a
   assert.equal(second.receipt.result.version, 1);
   assert.equal(second.receipt.message.to[0], user.email);
   await assert.rejects(mutateTask(db, admin, { ...body, task: { ...task, title: "Different" } }, config), expectStatus(409));
+});
+test("a rejected follow-up can be corrected and created with a fresh request", async () => {
+  const db = database();
+  const key = followUpRequestKey("test", admin.uid, 123);
+  const invalid = { task: { ...task, title: "x".repeat(301) }, requestId: "invalid-follow-up" };
+  pendingFollowUpRequests.set(key, invalid);
+  try {
+    await mutateTask(db, admin, { ...invalid, action: "create", boardId: "test" }, config);
+    assert.fail("The server should reject the title");
+  } catch (error) {
+    assert.equal(error.status, 400);
+    assert.equal(discardRejectedFollowUpRequest(key, new TaskRequestError(error.status, error.message)), true);
+  }
+  assert.equal(pendingFollowUpRequests.has(key), false);
+  assert.equal(db.data.size, 0);
+  const corrected = await mutateTask(db, admin, { task, requestId: "corrected-follow-up", action: "create", boardId: "test" }, config);
+  assert.equal(corrected.receipt.result.title, task.title);
+});
+test("a lost follow-up response can be retried after navigation without another save or receipt", async () => {
+  const db = database();
+  const key = followUpRequestKey("test", admin.uid, 124);
+  const attempt = { task: { ...task, createdAt: now, updatedAt: now }, requestId: "lost-follow-up" };
+  pendingFollowUpRequests.set(key, attempt);
+  try {
+    const first = await mutateTask(db, admin, { ...attempt, action: "create", boardId: "test" }, config);
+    // A missing response must preserve the attempt even after an auth or server error.
+    for (const error of [new Error("Network disconnected"), new TaskRequestError(401, "Expired"), new TaskRequestError(403, "Denied"), new TaskRequestError(500, "Unavailable")]) {
+      assert.equal(discardRejectedFollowUpRequest(key, error), false);
+    }
+    // A newly mounted page imports the same application-level request store.
+    const remountedPage = await import("../src/lib/firebase/taskRequests.ts");
+    const retry = remountedPage.pendingFollowUpRequests.get(key);
+    assert.deepEqual(retry, attempt);
+    assert.equal(remountedPage.pendingFollowUpRequests.has(followUpRequestKey("test", user.uid, 124)), false);
+    assert.equal(remountedPage.pendingFollowUpRequests.has(followUpRequestKey("another-board", admin.uid, 124)), false);
+    const second = await mutateTask(db, admin, { ...retry, action: "create", boardId: "test" }, config);
+    assert.equal(first.receiptRef.id, second.receiptRef.id);
+    assert.equal(db.data.size, 2);
+    assert.equal(second.receipt.result.version, 1);
+  } finally {
+    pendingFollowUpRequests.delete(key);
+  }
 });
 test("wrong boards, unverified users, unauthorized reassignment and stale writes fail", async () => {
   const db = database({ "taskBoards/test/tasks/task1": task });

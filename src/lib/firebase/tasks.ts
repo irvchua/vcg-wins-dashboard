@@ -12,6 +12,7 @@ import {
   where,
 } from "firebase/firestore";
 import type { TaskEntry, TaskStatus } from "../../types";
+import { TaskRequestError } from "./taskRequests";
 import { FirestoreConflictError as TaskConflictError, getFirebaseApp, isFirebaseAppConfigured, type AuthUser } from "./auth";
 
 export { TaskConflictError };
@@ -230,7 +231,7 @@ async function callTaskApi<T>(body: Record<string, unknown>, requestId: string =
   if (!response) throw new Error("Task server unavailable.");
   const data = await response.json();
   if (response.status === 409) throw new TaskConflictError();
-  if (!response.ok) throw new Error(data.error || "Task could not be saved.");
+  if (!response.ok) throw new TaskRequestError(response.status, data.error || "Task could not be saved.");
   if (data.emailStatus === "pending" || data.emailStatus === "expired") {
     window.dispatchEvent(new CustomEvent("task-email-pending", { detail: { receiptId: data.receiptId, expired: data.emailStatus === "expired" } }));
   }

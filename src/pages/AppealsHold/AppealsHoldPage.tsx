@@ -17,10 +17,16 @@ import {
   createTask,
   isTasksFirebaseConfigured,
   registerTaskMember,
+  tasksBoardId,
   subscribeToTaskMembers,
   subscribeToTaskAdminStatus,
   type TaskMember,
 } from "../../lib/firebase/tasks";
+import {
+  discardRejectedFollowUpRequest,
+  followUpRequestKey,
+  pendingFollowUpRequests,
+} from "../../lib/firebase/taskRequests";
 import type { AppealHoldEntry, HoldStatus, TaskEntry } from "../../types";
 
 type AppealDraft = Omit<AppealHoldEntry, "id" | "position" | "updatedAt" | "updatedBy" | "version">;
@@ -120,7 +126,6 @@ export default function AppealsHoldPage() {
   const [isTaskAdmin, setIsTaskAdmin] = useState(false);
   const [isTaskAdminLoading, setIsTaskAdminLoading] = useState(true);
   const [memberDirectoryError, setMemberDirectoryError] = useState("");
-  const pendingFollowUps = useRef(new Map<number, { task: TaskEntry; requestId: string }>());
   const [isFollowUpLocked, setIsFollowUpLocked] = useState(false);
   const [adminTaskMembers, setTaskMembers] = useState<TaskMember[]>([]);
   const [isFollowUpOpen, setIsFollowUpOpen] = useState(false);
@@ -131,6 +136,12 @@ export default function AppealsHoldPage() {
   const [followUpError, setFollowUpError] = useState("");
   const [isCreatingFollowUp, setIsCreatingFollowUp] = useState(false);
   const [followUpCreated, setFollowUpCreated] = useState<{ assignedTo: string; dueDate: string } | null>(null);
+  const isPageMounted = useRef(false);
+
+  useEffect(() => {
+    isPageMounted.current = true;
+    return () => { isPageMounted.current = false; };
+  }, []);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
@@ -148,9 +159,11 @@ export default function AppealsHoldPage() {
     if (!isTasksFirebaseConfigured || !authUser) return;
     return subscribeToTaskAdminStatus(authUser.email, (isAdmin) => {
       setIsTaskAdmin(isAdmin);
+      if (!isAdmin) setIsFollowUpOpen(false);
       setIsTaskAdminLoading(false);
     }, () => {
       setIsTaskAdmin(false);
+      setIsFollowUpOpen(false);
       setIsTaskAdminLoading(false);
     }) ?? undefined;
   }, [authUser]);
@@ -171,9 +184,11 @@ export default function AppealsHoldPage() {
     return () => unsubscribe?.();
   }, [authUser, isTaskAdmin, isTaskAdminLoading]);
 
-  const taskMembers = isTaskAdmin ? adminTaskMembers : authUser
-    ? [{ id: authUser.id, email: authUser.email.toLowerCase(), name: authUser.name }]
-    : [];
+  // Only task administrators can create follow-up tasks (see the gate around the
+  // "Create Follow-up Task" button below), so the assignee directory never needs the
+  // self-only fallback a non-admin task creator would otherwise get.
+  const taskMembers = adminTaskMembers;
+  const canCreateFollowUp = isTasksFirebaseConfigured && !isTaskAdminLoading && isTaskAdmin;
 
   const hasUnsavedRowChanges = Boolean(editDraft && editInitial &&
     (Object.keys(defaultDraft) as Array<keyof AppealDraft>)
@@ -198,7 +213,7 @@ export default function AppealsHoldPage() {
             setIsConfirmingDelete(false);
             setIsFollowUpOpen(false);
             setFollowUpCreated(null);
-            setIsFollowUpLocked(pendingFollowUps.current.has(linkedEntry.id));
+            setIsFollowUpLocked(pendingFollowUpRequests.has(followUpRequestKey(tasksBoardId, authUser?.id, linkedEntry.id)));
           } else {
             setSyncMessage("The linked appeal was not found. It may have been deleted.");
           }
@@ -211,7 +226,7 @@ export default function AppealsHoldPage() {
       }
     );
     return () => unsubscribe?.();
-  }, [linkedRecordId]);
+  }, [linkedRecordId, authUser?.id]);
 
   const updaterName = authUser?.name.trim() || "Local user";
 
@@ -296,7 +311,7 @@ export default function AppealsHoldPage() {
   }
 
   function openEditRecord(entry: AppealHoldEntry) {
-    setIsFollowUpLocked(pendingFollowUps.current.has(entry.id));
+    setIsFollowUpLocked(pendingFollowUpRequests.has(followUpRequestKey(tasksBoardId, authUser?.id, entry.id)));
     setSelectedId(entry.id);
     setEditInitial({ ...entry });
     setEditDraft({ ...entry });
@@ -324,12 +339,12 @@ export default function AppealsHoldPage() {
   }
 
   function openFollowUpTask() {
-    if (!editInitial) return;
-    const pending = editInitial && pendingFollowUps.current.get(editInitial.id);
+    if (!editInitial || !canCreateFollowUp) return;
+    const pending = pendingFollowUpRequests.get(followUpRequestKey(tasksBoardId, authUser?.id, editInitial.id));
     setIsFollowUpLocked(Boolean(pending));
     setFollowUpTitle(pending ? pending.task.title : editInitial.vetName);
-    setFollowUpNotes(pending ? pending.task.description ?? "" : editInitial.notes ?? "");
-    setFollowUpAssigneeEmail(pending ? pending.task.assignedToEmail : !isTaskAdmin ? authUser?.email.toLowerCase() ?? "" : "");
+    setFollowUpNotes(pending ? (pending.task.description ?? "").split("\n").slice(1).join("\n") : editInitial.notes ?? "");
+    setFollowUpAssigneeEmail(pending ? pending.task.assignedToEmail : "");
     setFollowUpDueDate(pending ? pending.task.dueDate ?? "" : suggestedFollowUpDueDate());
     setFollowUpError("");
     setIsFollowUpOpen(true);
@@ -340,8 +355,9 @@ export default function AppealsHoldPage() {
   }
 
   async function submitFollowUpTask() {
-    if (!editInitial || isCreatingFollowUp || isTaskAdminLoading || isSaving) return;
-    const pending = pendingFollowUps.current.get(editInitial.id);
+    if (!editInitial || !canCreateFollowUp || isCreatingFollowUp || isSaving) return;
+    const requestKey = followUpRequestKey(tasksBoardId, authUser?.id, editInitial.id);
+    const pending = pendingFollowUpRequests.get(requestKey);
     if (hasUnsavedRowChanges && !pending) {
       setFollowUpError("Save your row changes before creating a follow-up task.");
       return;
@@ -372,19 +388,23 @@ export default function AppealsHoldPage() {
     };
 
     const requestId = pending?.requestId ?? createFollowUpTaskId();
-    pendingFollowUps.current.set(entry.id, { task: newTask, requestId });
+    pendingFollowUpRequests.set(requestKey, { task: newTask, requestId });
     setIsFollowUpLocked(true);
     setIsCreatingFollowUp(true);
     setFollowUpError("");
     try {
       await createTask(newTask, updaterName, requestId);
-      pendingFollowUps.current.delete(entry.id);
+      // If the user navigated away, keep the request until a mounted page can
+      // acknowledge success. A retry then retrieves the same saved task.
+      if (!isPageMounted.current) return;
+      pendingFollowUpRequests.delete(requestKey);
       setFollowUpCreated({ assignedTo: newTask.assignedTo, dueDate: newTask.dueDate ?? "" });
       setIsFollowUpOpen(false);
     } catch (error) {
+      if (discardRejectedFollowUpRequest(requestKey, error)) setIsFollowUpLocked(false);
       setFollowUpError(error instanceof Error ? error.message : "Task could not be created.");
     } finally {
-      setIsCreatingFollowUp(false);
+      if (isPageMounted.current) setIsCreatingFollowUp(false);
     }
   }
 
@@ -732,16 +752,16 @@ export default function AppealsHoldPage() {
                 />
               </label>
 
-              {isTasksFirebaseConfigured ? (
+              {canCreateFollowUp ? (
                 <div className="appeals-hold-followup">
                   {hasUnsavedRowChanges ? <p role="alert">Save your row changes before creating a follow-up task.</p> : null}
-                  {isTaskAdmin && memberDirectoryError ? <p role="alert">{memberDirectoryError}</p> : null}
+                  {memberDirectoryError ? <p role="alert">{memberDirectoryError}</p> : null}
                   {followUpCreated ? (
                     <p className="appeals-hold-followup-success">
                       Follow-up task created for {followUpCreated.assignedTo}, due {followUpCreated.dueDate}. <Link to="/tasks">Open Tasks</Link>
                     </p>
                   ) : (
-                    <button type="button" className="secondary-action-button" onClick={openFollowUpTask} disabled={isTaskAdminLoading || isSaving || (hasUnsavedRowChanges && !isFollowUpLocked)}>
+                    <button type="button" className="secondary-action-button" onClick={openFollowUpTask} disabled={isSaving || (hasUnsavedRowChanges && !isFollowUpLocked)}>
                       Create Follow-up Task
                     </button>
                   )}
@@ -793,7 +813,7 @@ export default function AppealsHoldPage() {
           </div>
         </div>
       ) : null}
-      {isFollowUpOpen && editInitial ? (
+      {isFollowUpOpen && editInitial && canCreateFollowUp ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={closeFollowUpTask}>
           <div className="task-modal appeals-hold-modal" role="dialog" aria-modal="true" aria-labelledby="follow-up-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => {
             if (event.key === "Escape") closeFollowUpTask();
@@ -806,13 +826,13 @@ export default function AppealsHoldPage() {
               <div className="appeals-hold-modal-body">
                 <label className="modal-field">
                   Title
-                  <input autoFocus required value={followUpTitle} disabled={isFollowUpLocked} onChange={(event) => setFollowUpTitle(event.target.value)} />
+                  <input autoFocus required maxLength={300} value={followUpTitle} disabled={isFollowUpLocked} onChange={(event) => setFollowUpTitle(event.target.value)} />
                 </label>
                 <label className="modal-field">
                   Notes
                   <textarea rows={5} value={followUpNotes} disabled={isFollowUpLocked} onChange={(event) => setFollowUpNotes(event.target.value)} />
                 </label>
-                {isTaskAdmin && memberDirectoryError ? <p role="alert">{memberDirectoryError}</p> : null}
+                {memberDirectoryError ? <p role="alert">{memberDirectoryError}</p> : null}
                 {isFollowUpLocked ? <p>Retrying will use the original task details.</p> : null}
                       <div className="task-modal-row">
                         <label className="modal-field">
