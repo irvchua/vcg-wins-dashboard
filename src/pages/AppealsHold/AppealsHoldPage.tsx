@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import "../../styles/shared.css";
 import "../Tasks/TasksPage.css";
 import "./AppealsHoldPage.css";
@@ -13,7 +13,15 @@ import {
   saveAppealRecord,
   subscribeToAppealRecords,
 } from "../../lib/firebase/appealsHold";
-import type { AppealHoldEntry, HoldStatus } from "../../types";
+import {
+  createTask,
+  isTasksFirebaseConfigured,
+  registerTaskMember,
+  subscribeToTaskMembers,
+  subscribeToTaskAdminStatus,
+  type TaskMember,
+} from "../../lib/firebase/tasks";
+import type { AppealHoldEntry, HoldStatus, TaskEntry } from "../../types";
 
 type AppealDraft = Omit<AppealHoldEntry, "id" | "position" | "updatedAt" | "updatedBy" | "version">;
 
@@ -42,6 +50,17 @@ const defaultDraft: AppealDraft = {
 
 function createRecordId(): number {
   return Date.now() * 1000 + Math.floor(Math.random() * 1000);
+}
+
+function createFollowUpTaskId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function suggestedFollowUpDueDate(): string {
+  const date = new Date();
+  date.setDate(date.getDate() + 3);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function getHoldStatusBadgeClass(status: HoldStatus): string {
@@ -74,6 +93,8 @@ function formatRelativeUpdated(timestamp: string, now: Date): string {
 
 export default function AppealsHoldPage() {
   const authUser = useAuthUser();
+  const [searchParams] = useSearchParams();
+  const linkedRecordId = searchParams.get("record");
   const [signOutError, setSignOutError] = useState("");
   const [entries, setEntries] = useState<AppealHoldEntry[]>([]);
   const [isLoading, setIsLoading] = useState(isAppealsHoldFirebaseConfigured);
@@ -96,18 +117,92 @@ export default function AppealsHoldPage() {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [savingStatusId, setSavingStatusId] = useState<number | null>(null);
 
+  const [isTaskAdmin, setIsTaskAdmin] = useState(false);
+  const [isTaskAdminLoading, setIsTaskAdminLoading] = useState(true);
+  const [memberDirectoryError, setMemberDirectoryError] = useState("");
+  const pendingFollowUps = useRef(new Map<number, { task: TaskEntry; requestId: string }>());
+  const [isFollowUpLocked, setIsFollowUpLocked] = useState(false);
+  const [adminTaskMembers, setTaskMembers] = useState<TaskMember[]>([]);
+  const [isFollowUpOpen, setIsFollowUpOpen] = useState(false);
+  const [followUpAssigneeEmail, setFollowUpAssigneeEmail] = useState("");
+  const [followUpTitle, setFollowUpTitle] = useState("");
+  const [followUpNotes, setFollowUpNotes] = useState("");
+  const [followUpDueDate, setFollowUpDueDate] = useState("");
+  const [followUpError, setFollowUpError] = useState("");
+  const [isCreatingFollowUp, setIsCreatingFollowUp] = useState(false);
+  const [followUpCreated, setFollowUpCreated] = useState<{ assignedTo: string; dueDate: string } | null>(null);
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 30_000);
     return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
+    if (!isTasksFirebaseConfigured || !authUser) return;
+    registerTaskMember(authUser).catch((error) => {
+      console.error("Task member registration failed:", error);
+    });
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!isTasksFirebaseConfigured || !authUser) return;
+    return subscribeToTaskAdminStatus(authUser.email, (isAdmin) => {
+      setIsTaskAdmin(isAdmin);
+      setIsTaskAdminLoading(false);
+    }, () => {
+      setIsTaskAdmin(false);
+      setIsTaskAdminLoading(false);
+    }) ?? undefined;
+  }, [authUser]);
+
+  useEffect(() => {
+    if (!isTasksFirebaseConfigured || !authUser || isTaskAdminLoading) return;
+    if (!isTaskAdmin) return;
+    const unsubscribe = subscribeToTaskMembers(
+      (members) => {
+        setTaskMembers(members);
+        setMemberDirectoryError("");
+      },
+      () => {
+        setTaskMembers([]);
+        setMemberDirectoryError("The assignee directory is unavailable. Check your connection.");
+      }
+    );
+    return () => unsubscribe?.();
+  }, [authUser, isTaskAdmin, isTaskAdminLoading]);
+
+  const taskMembers = isTaskAdmin ? adminTaskMembers : authUser
+    ? [{ id: authUser.id, email: authUser.email.toLowerCase(), name: authUser.name }]
+    : [];
+
+  const hasUnsavedRowChanges = Boolean(editDraft && editInitial &&
+    (Object.keys(defaultDraft) as Array<keyof AppealDraft>)
+      .some((field) => (editDraft[field] ?? "") !== (editInitial[field] ?? "")));
+
+  useEffect(() => {
     if (!isAppealsHoldFirebaseConfigured) return;
 
+    let openedLinkedRecord = false;
     const unsubscribe = subscribeToAppealRecords(
       (nextEntries) => {
         setEntries(nextEntries);
         setIsLoading(false);
+        if (linkedRecordId && !openedLinkedRecord) {
+          const linkedEntry = nextEntries.find((entry) => String(entry.id) === linkedRecordId);
+          if (linkedEntry) {
+            openedLinkedRecord = true;
+            setSelectedId(linkedEntry.id);
+            setEditInitial({ ...linkedEntry });
+            setEditDraft({ ...linkedEntry });
+            setEditConflict("");
+            setIsConfirmingDelete(false);
+            setIsFollowUpOpen(false);
+            setFollowUpCreated(null);
+            setIsFollowUpLocked(pendingFollowUps.current.has(linkedEntry.id));
+          } else {
+            setSyncMessage("The linked appeal was not found. It may have been deleted.");
+          }
+        }
       },
       (error) => {
         console.error("Appeals hold sync failed:", error);
@@ -116,7 +211,7 @@ export default function AppealsHoldPage() {
       }
     );
     return () => unsubscribe?.();
-  }, []);
+  }, [linkedRecordId]);
 
   const updaterName = authUser?.name.trim() || "Local user";
 
@@ -178,7 +273,7 @@ export default function AppealsHoldPage() {
   async function submitAddRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const vetName = addDraft.vetName.trim();
-    if (!vetName || isSaving) return;
+    if (!vetName || isSaving || isCreatingFollowUp) return;
 
     const newEntry: AppealHoldEntry = {
       ...addDraft,
@@ -201,24 +296,101 @@ export default function AppealsHoldPage() {
   }
 
   function openEditRecord(entry: AppealHoldEntry) {
+    setIsFollowUpLocked(pendingFollowUps.current.has(entry.id));
     setSelectedId(entry.id);
     setEditInitial({ ...entry });
     setEditDraft({ ...entry });
     setEditConflict("");
     setIsConfirmingDelete(false);
+    setIsFollowUpOpen(false);
+    setFollowUpAssigneeEmail("");
+    setFollowUpDueDate("");
+    setFollowUpError("");
+    setFollowUpCreated(null);
   }
 
   function dismissEditRecord() {
+    if (isCreatingFollowUp) return;
     setSelectedId(null);
     setEditInitial(null);
     setEditDraft(null);
     setEditConflict("");
     setIsConfirmingDelete(false);
+    setIsFollowUpOpen(false);
+    setFollowUpAssigneeEmail("");
+    setFollowUpDueDate("");
+    setFollowUpError("");
+    setFollowUpCreated(null);
+  }
+
+  function openFollowUpTask() {
+    if (!editInitial) return;
+    const pending = editInitial && pendingFollowUps.current.get(editInitial.id);
+    setIsFollowUpLocked(Boolean(pending));
+    setFollowUpTitle(pending ? pending.task.title : editInitial.vetName);
+    setFollowUpNotes(pending ? pending.task.description ?? "" : editInitial.notes ?? "");
+    setFollowUpAssigneeEmail(pending ? pending.task.assignedToEmail : !isTaskAdmin ? authUser?.email.toLowerCase() ?? "" : "");
+    setFollowUpDueDate(pending ? pending.task.dueDate ?? "" : suggestedFollowUpDueDate());
+    setFollowUpError("");
+    setIsFollowUpOpen(true);
+  }
+
+  function closeFollowUpTask() {
+    if (!isCreatingFollowUp) setIsFollowUpOpen(false);
+  }
+
+  async function submitFollowUpTask() {
+    if (!editInitial || isCreatingFollowUp || isTaskAdminLoading || isSaving) return;
+    const pending = pendingFollowUps.current.get(editInitial.id);
+    if (hasUnsavedRowChanges && !pending) {
+      setFollowUpError("Save your row changes before creating a follow-up task.");
+      return;
+    }
+
+    const member = taskMembers.find((candidate) => candidate.email === followUpAssigneeEmail);
+    if (!pending && (!member || !followUpDueDate || !followUpTitle.trim())) {
+      setFollowUpError("Enter a title and choose an assignee and due date.");
+      return;
+    }
+
+    const entry = editInitial;
+    const newTask: TaskEntry = pending?.task ?? {
+      id: createFollowUpTaskId(),
+      title: followUpTitle.trim(),
+      description: `${window.location.origin}/appeals-hold?record=${entry.id}\n${followUpNotes.trim()}`.trimEnd(),
+      assignedTo: member!.name || member!.email,
+      assignedToEmail: member!.email,
+      assignedByEmail: authUser?.email.toLowerCase() || "local@example.com",
+      priority: "medium",
+      status: "todo",
+      dueDate: followUpDueDate,
+      createdBy: updaterName,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      updatedBy: updaterName,
+      version: 1,
+    };
+
+    const requestId = pending?.requestId ?? createFollowUpTaskId();
+    pendingFollowUps.current.set(entry.id, { task: newTask, requestId });
+    setIsFollowUpLocked(true);
+    setIsCreatingFollowUp(true);
+    setFollowUpError("");
+    try {
+      await createTask(newTask, updaterName, requestId);
+      pendingFollowUps.current.delete(entry.id);
+      setFollowUpCreated({ assignedTo: newTask.assignedTo, dueDate: newTask.dueDate ?? "" });
+      setIsFollowUpOpen(false);
+    } catch (error) {
+      setFollowUpError(error instanceof Error ? error.message : "Task could not be created.");
+    } finally {
+      setIsCreatingFollowUp(false);
+    }
   }
 
   async function submitEditRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedId || !editInitial || !editDraft || isSaving) return;
+    if (!selectedId || !editInitial || !editDraft || isSaving || isCreatingFollowUp) return;
 
     const vetName = editDraft.vetName.trim();
     if (!vetName) {
@@ -252,7 +424,7 @@ export default function AppealsHoldPage() {
   }
 
   async function handleDeleteRecord() {
-    if (!selectedId || !editInitial || isSaving) return;
+    if (!selectedId || !editInitial || isSaving || isCreatingFollowUp) return;
 
     setIsSaving(true);
     try {
@@ -479,8 +651,8 @@ export default function AppealsHoldPage() {
               <div className="appeals-hold-modal-footer">
               {addError ? <p className="tasks-sync-message" role="alert">{addError}</p> : null}
               <div className="record-modal-actions">
-                <button type="button" className="secondary-action-button" onClick={closeAddRecord} disabled={isSaving}>Cancel</button>
-                <button type="submit" className="primary-action-button" disabled={isSaving}>{isSaving ? "Saving…" : "Add Row"}</button>
+                <button type="button" className="secondary-action-button" onClick={closeAddRecord} disabled={isSaving || isCreatingFollowUp}>Cancel</button>
+                <button type="submit" className="primary-action-button" disabled={isSaving || isCreatingFollowUp}>{isSaving ? "Saving…" : "Add Row"}</button>
               </div>
               </div>
             </form>
@@ -488,7 +660,7 @@ export default function AppealsHoldPage() {
         </div>
       ) : null}
 
-      {editDraft ? (
+      {editDraft && !isFollowUpOpen ? (
         <div className="modal-backdrop" role="presentation" onMouseDown={dismissEditRecord}>
           <div className="task-modal appeals-hold-modal" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
             <h2>Edit Row</h2>
@@ -560,27 +732,43 @@ export default function AppealsHoldPage() {
                 />
               </label>
 
+              {isTasksFirebaseConfigured ? (
+                <div className="appeals-hold-followup">
+                  {hasUnsavedRowChanges ? <p role="alert">Save your row changes before creating a follow-up task.</p> : null}
+                  {isTaskAdmin && memberDirectoryError ? <p role="alert">{memberDirectoryError}</p> : null}
+                  {followUpCreated ? (
+                    <p className="appeals-hold-followup-success">
+                      Follow-up task created for {followUpCreated.assignedTo}, due {followUpCreated.dueDate}. <Link to="/tasks">Open Tasks</Link>
+                    </p>
+                  ) : (
+                    <button type="button" className="secondary-action-button" onClick={openFollowUpTask} disabled={isTaskAdminLoading || isSaving || (hasUnsavedRowChanges && !isFollowUpLocked)}>
+                      Create Follow-up Task
+                    </button>
+                  )}
+                </div>
+              ) : null}
+
               </div>
               <div className="appeals-hold-modal-footer">
               <div className="record-modal-actions task-edit-actions">
                 {isConfirmingDelete ? (
                   <>
                     <span className="tasks-delete-confirm-label">Delete this row?</span>
-                    <button type="button" className="secondary-action-button" onClick={() => setIsConfirmingDelete(false)} disabled={isSaving}>
+                    <button type="button" className="secondary-action-button" onClick={() => setIsConfirmingDelete(false)} disabled={isSaving || isCreatingFollowUp}>
                       Cancel
                     </button>
-                    <button type="button" className="danger-confirm-button" onClick={handleDeleteRecord} disabled={isSaving}>
+                    <button type="button" className="danger-confirm-button" onClick={handleDeleteRecord} disabled={isSaving || isCreatingFollowUp}>
                       Confirm Delete
                     </button>
                   </>
                 ) : (
                   <>
-                    <button type="button" className="task-delete-action" onClick={() => setIsConfirmingDelete(true)} disabled={isSaving}>
+                    <button type="button" className="task-delete-action" onClick={() => setIsConfirmingDelete(true)} disabled={isSaving || isCreatingFollowUp}>
                       Delete
                     </button>
                     <span className="task-actions-spacer" />
-                    <button type="button" className="secondary-action-button" onClick={dismissEditRecord} disabled={isSaving}>Cancel</button>
-                    <button type="submit" className="primary-action-button" disabled={isSaving}>
+                    <button type="button" className="secondary-action-button" onClick={dismissEditRecord} disabled={isSaving || isCreatingFollowUp}>Cancel</button>
+                    <button type="submit" className="primary-action-button" disabled={isSaving || isCreatingFollowUp}>
                       {isSaving ? "Saving…" : "Save changes"}
                     </button>
                   </>
@@ -600,6 +788,67 @@ export default function AppealsHoldPage() {
                   </button>
                 </div>
               ) : null}
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+      {isFollowUpOpen && editInitial ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeFollowUpTask}>
+          <div className="task-modal appeals-hold-modal" role="dialog" aria-modal="true" aria-labelledby="follow-up-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => {
+            if (event.key === "Escape") closeFollowUpTask();
+          }}>
+            <h2 id="follow-up-title">Create Follow-up Task</h2>
+            <form onSubmit={(event) => {
+              event.preventDefault();
+              void submitFollowUpTask();
+            }}>
+              <div className="appeals-hold-modal-body">
+                <label className="modal-field">
+                  Title
+                  <input autoFocus required value={followUpTitle} disabled={isFollowUpLocked} onChange={(event) => setFollowUpTitle(event.target.value)} />
+                </label>
+                <label className="modal-field">
+                  Notes
+                  <textarea rows={5} value={followUpNotes} disabled={isFollowUpLocked} onChange={(event) => setFollowUpNotes(event.target.value)} />
+                </label>
+                {isTaskAdmin && memberDirectoryError ? <p role="alert">{memberDirectoryError}</p> : null}
+                {isFollowUpLocked ? <p>Retrying will use the original task details.</p> : null}
+                      <div className="task-modal-row">
+                        <label className="modal-field">
+                          Assign follow-up to
+                          <select
+                            disabled={isFollowUpLocked || !isTaskAdmin}
+                            value={followUpAssigneeEmail}
+                            onChange={(event) => setFollowUpAssigneeEmail(event.target.value)}
+                          >
+                            <option value="">Select a user</option>
+                            {taskMembers.map((member) => (
+                              <option key={member.id} value={member.email}>
+                                {member.name ? `${member.name} (${member.email})` : member.email}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="modal-field">
+                          Due date
+                          <input
+                            type="date"
+                            disabled={isFollowUpLocked}
+                            value={followUpDueDate}
+                            onChange={(event) => setFollowUpDueDate(event.target.value)}
+                          />
+                        </label>
+                      </div>
+                      {followUpError ? <p className="tasks-sync-message" role="alert">{followUpError}</p> : null}
+                      <div className="record-modal-actions">
+                        <button type="button" className="secondary-action-button" onClick={closeFollowUpTask} disabled={isCreatingFollowUp}>
+                          Cancel
+                        </button>
+                        <button type="submit" className="primary-action-button" disabled={isCreatingFollowUp || isSaving || isTaskAdminLoading || (hasUnsavedRowChanges && !isFollowUpLocked)}>
+                          {isCreatingFollowUp ? "Creating…" : isFollowUpLocked ? "Retry Create Task" : "Create Task"}
+                        </button>
+                      </div>
               </div>
             </form>
           </div>

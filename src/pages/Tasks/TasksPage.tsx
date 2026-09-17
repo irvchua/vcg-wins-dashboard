@@ -113,6 +113,22 @@ function isOverdue(task: TaskEntry): boolean {
   return task.dueDate < today;
 }
 
+function sourceAppealLink(description?: string): string | null {
+  const firstLine = description?.split("\n", 1)[0].trim();
+  if (!firstLine) return null;
+  try {
+    const url = new URL(firstLine);
+    const recordId = url.searchParams.get("record");
+    if ((url.protocol === "https:" || url.protocol === "http:") &&
+        url.pathname === "/appeals-hold" && recordId && /^\d+$/.test(recordId)) {
+      return `/appeals-hold?record=${recordId}`;
+    }
+  } catch {
+    // Ordinary task notes do not have a source URL.
+  }
+  return null;
+}
+
 export default function TasksPage() {
   const authUser = useAuthUser();
   const [isTaskAdmin, setIsTaskAdmin] = useState(!isTasksFirebaseConfigured);
@@ -142,6 +158,8 @@ export default function TasksPage() {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const hasInitializedBoard = useRef(false);
   const pendingAddTaskRef = useRef<{ task: TaskEntry; requestId: string } | null>(null);
+
+  const sourceAppealHref = sourceAppealLink(editTaskDraft?.description);
 
   const canEditTodoDueDate = !isTasksFirebaseConfigured || (editTaskInitial?.assignedByEmail
     ? editTaskInitial.assignedByEmail === authUser?.email.toLowerCase()
@@ -802,13 +820,25 @@ export default function TasksPage() {
                       onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, title: event.target.value })}
                     />
                   </label>
-                  <label className="modal-field">
-                    Description
+                  <div className="modal-field">
+                    <label htmlFor="edit-task-notes">Notes</label>
+                    <div className={sourceAppealHref ? "task-linked-notes" : undefined}>
+                      {sourceAppealHref ? <Link className="task-source-link" to={sourceAppealHref}>View entry in Appeals on Hold</Link> : null}
                     <textarea
-                      value={editTaskDraft.description ?? ""}
-                      onChange={(event) => setEditTaskDraft((draft) => draft && { ...draft, description: event.target.value })}
+                      id="edit-task-notes"
+                      value={sourceAppealHref ? editTaskDraft.description!.split("\n").slice(1).join("\n") : editTaskDraft.description ?? ""}
+                      onChange={(event) => {
+                        const notes = event.target.value;
+                        setEditTaskDraft((draft) => draft && {
+                          ...draft,
+                          description: sourceAppealLink(draft.description)
+                            ? `${draft.description!.split("\n", 1)[0]}\n${notes}`
+                            : notes,
+                        });
+                      }}
                     />
-                  </label>
+                    </div>
+                  </div>
                   {isTaskAdmin ? (
                     <div className="task-modal-row task-modal-row-assignee">
                       <label className="modal-field">

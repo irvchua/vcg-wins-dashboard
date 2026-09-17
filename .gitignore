@@ -29,3 +29,6 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+
+# Local security review
+/docs/security-review-2026-09-16.md

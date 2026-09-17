@@ -344,3 +344,32 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+.task-linked-notes {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.task-linked-notes .task-source-link {
+  display: block;
+  width: fit-content;
+  margin-bottom: 16px;
+  color: #174ea6;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.task-source-link:focus-visible {
+  outline: 2px solid #174ea6;
+  outline-offset: 3px;
+}
+
+.modal-field .task-linked-notes textarea {
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+}
