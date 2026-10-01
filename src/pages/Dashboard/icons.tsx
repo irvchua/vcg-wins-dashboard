@@ -63,3 +63,13 @@ export function AdminAccessIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+export function OnboardingIcon({ className }: IconProps) {
+  return (
+    <svg {...commonProps} className={className}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 3 14 8 19 8" />
+      <path d="M8.5 16.5c1.2-1.6 2.2-1.6 2.7-.2s1.6 1.3 3.3-.8" />
+    </svg>
+  );
+}
