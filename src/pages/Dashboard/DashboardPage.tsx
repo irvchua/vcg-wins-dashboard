@@ -5,7 +5,7 @@ import "./DashboardPage.css";
 import { useAuthUser } from "../../components/authContext";
 import { canUserEdit, signOutUser } from "../../lib/firebase/auth";
 import { isTasksFirebaseConfigured, registerTaskMember, subscribeToTaskAdminStatus } from "../../lib/firebase/tasks";
-import { AdminAccessIcon, CrmIcon, OnHoldIcon, ProgressBoardIcon, TasksIcon } from "./icons";
+import { AdminAccessIcon, CrmIcon, OnboardingIcon, OnHoldIcon, ProgressBoardIcon, TasksIcon } from "./icons";
 
 type ToolTile = {
   description: string;
@@ -34,6 +34,13 @@ const tools: ToolTile[] = [
     description: "Track appeals that are currently on hold.",
     icon: <OnHoldIcon />,
     to: "/appeals-hold",
+  },
+  {
+    name: "Client Onboarding",
+    description: "Welcome emails, VCG Affiliation Agreements and e-signing.",
+    icon: <OnboardingIcon />,
+    openInNewTab: true,
+    to: "https://sign.veteranschoiceglobal.com/",
   },
   {
     name: "Zoho CRM",
