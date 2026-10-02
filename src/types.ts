@@ -49,6 +49,7 @@ export type TaskEntry = {
   position?: number;
   createdBy: string;
   createdAt: string;
+  completedAt?: string;
   updatedAt?: string;
   updatedBy?: string;
   version?: number;

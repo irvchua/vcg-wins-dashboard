@@ -49,6 +49,9 @@ export function prepareTask(input, before, user, isAdmin, confirmed, now) {
     position: input.position ?? before?.position ?? 0,
     createdBy: before?.createdBy ?? user.name ?? user.email,
     createdAt: before?.createdAt ?? now,
+    // Recorded when the task first moves to Done and cleared if it is reopened;
+    // tasks completed before this field existed keep an empty value.
+    completedAt: input.status !== "done" ? "" : before?.status === "done" ? (before.completedAt || "") : now,
     updatedBy: user.name || user.email, updatedAt: now, version: (before?.version ?? (before ? 1 : 0)) + 1,
   };
 }

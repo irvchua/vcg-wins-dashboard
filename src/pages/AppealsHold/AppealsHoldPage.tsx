@@ -20,6 +20,7 @@ import {
   tasksBoardId,
   subscribeToTaskMembers,
   subscribeToTaskAdminStatus,
+  subscribeToTasks,
   type TaskMember,
 } from "../../lib/firebase/tasks";
 import {
@@ -27,7 +28,7 @@ import {
   followUpRequestKey,
   pendingFollowUpRequests,
 } from "../../lib/firebase/taskRequests";
-import type { AppealHoldEntry, HoldStatus, TaskEntry } from "../../types";
+import type { AppealHoldEntry, HoldStatus, TaskEntry, TaskStatus } from "../../types";
 
 type AppealDraft = Omit<AppealHoldEntry, "id" | "position" | "updatedAt" | "updatedBy" | "version">;
 
@@ -67,6 +68,56 @@ function suggestedFollowUpDueDate(): string {
   const date = new Date();
   date.setDate(date.getDate() + 3);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+// Same order and labels as the Tasks board columns.
+const taskStatusConfig: Array<{ key: TaskStatus; title: string }> = [
+  { key: "todo", title: "TO DO" },
+  { key: "inProgress", title: "IN PROGRESS" },
+  { key: "blocked", title: "BLOCKED" },
+  { key: "done", title: "DONE" },
+];
+
+function taskStatusTitle(status: TaskStatus): string {
+  return taskStatusConfig.find((config) => config.key === status)?.title ?? status;
+}
+
+// Follow-up tasks link back to their appeal on the first line of the description
+// (see submitFollowUpTask), which also identifies follow-ups created before this history existed.
+function appealRecordIdForTask(task: TaskEntry): string | null {
+  const firstLine = task.description?.split("\n", 1)[0].trim();
+  if (!firstLine) return null;
+  try {
+    const url = new URL(firstLine);
+    const recordId = url.searchParams.get("record");
+    if ((url.protocol === "https:" || url.protocol === "http:") &&
+        url.pathname === "/appeals-hold" && recordId && /^\d+$/.test(recordId)) {
+      return recordId;
+    }
+  } catch {
+    // Ordinary task notes do not have a source URL.
+  }
+  return null;
+}
+
+function formatTrailDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+function formatTrailDateTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+// Due dates are stored as calendar days (YYYY-MM-DD); parse them as local dates so
+// they do not shift a day in time zones west of UTC.
+function formatTrailDueDate(dueDate: string): string {
+  const [year, month, day] = dueDate.split("-").map(Number);
+  if (!year || !month || !day) return dueDate;
+  return new Date(year, month - 1, day).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
 function getHoldStatusBadgeClass(status: HoldStatus): string {
@@ -136,6 +187,8 @@ export default function AppealsHoldPage() {
   const [followUpError, setFollowUpError] = useState("");
   const [isCreatingFollowUp, setIsCreatingFollowUp] = useState(false);
   const [followUpCreated, setFollowUpCreated] = useState<{ assignedTo: string; dueDate: string } | null>(null);
+  const [followUpTasks, setFollowUpTasks] = useState<TaskEntry[]>([]);
+  const [followUpTrailError, setFollowUpTrailError] = useState("");
   const isPageMounted = useRef(false);
 
   useEffect(() => {
@@ -189,6 +242,39 @@ export default function AppealsHoldPage() {
   // self-only fallback a non-admin task creator would otherwise get.
   const taskMembers = adminTaskMembers;
   const canCreateFollowUp = isTasksFirebaseConfigured && !isTaskAdminLoading && isTaskAdmin;
+
+  // Only task administrators can read every task, so the history is limited to them;
+  // anyone else would see a partial history made up of their own assignments.
+  useEffect(() => {
+    if (!canCreateFollowUp) return;
+    const unsubscribe = subscribeToTasks(
+      { isAdmin: true },
+      (tasks) => {
+        setFollowUpTasks(tasks.filter((task) => appealRecordIdForTask(task) !== null));
+        setFollowUpTrailError("");
+      },
+      (error) => {
+        console.error("Follow-up history sync failed:", error);
+        setFollowUpTasks([]);
+        setFollowUpTrailError("Follow-up history is unavailable. Check your connection.");
+      }
+    );
+    return () => unsubscribe?.();
+  }, [canCreateFollowUp]);
+
+  const followUpsByRecordId = useMemo(() => {
+    const grouped = new Map<string, TaskEntry[]>();
+    for (const task of followUpTasks) {
+      const recordId = appealRecordIdForTask(task)!;
+      grouped.set(recordId, [...(grouped.get(recordId) ?? []), task]);
+    }
+    for (const tasks of grouped.values()) {
+      tasks.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+    }
+    return grouped;
+  }, [followUpTasks]);
+
+  const selectedFollowUps = selectedId !== null ? followUpsByRecordId.get(String(selectedId)) ?? [] : [];
 
   const hasUnsavedRowChanges = Boolean(editDraft && editInitial &&
     (Object.keys(defaultDraft) as Array<keyof AppealDraft>)
@@ -548,6 +634,7 @@ export default function AppealsHoldPage() {
                     <th>Notes</th>
                     <th>Action Needed</th>
                     <th>Notes On Hold Status</th>
+                    {canCreateFollowUp ? <th>Follow-ups</th> : null}
                     <th>Updated</th>
                   </tr>
                 </thead>
@@ -579,12 +666,32 @@ export default function AppealsHoldPage() {
                         <td>{entry.notes || "—"}</td>
                         <td>{entry.actionNeeded || "—"}</td>
                         <td>{entry.notesOnHoldStatus || "—"}</td>
+                        {canCreateFollowUp ? (
+                          <td>
+                            {(() => {
+                              const followUps = followUpsByRecordId.get(String(entry.id)) ?? [];
+                              if (!followUps.length) return "—";
+                              return (
+                                <div className="appeals-hold-followup-counts">
+                                  {taskStatusConfig.map(({ key, title }) => {
+                                    const count = followUps.filter((task) => task.status === key).length;
+                                    return count ? (
+                                      <span key={key} className={`appeals-hold-task-status appeals-hold-task-status-${key}`}>
+                                        {count} {title}
+                                      </span>
+                                    ) : null;
+                                  })}
+                                </div>
+                              );
+                            })()}
+                          </td>
+                        ) : null}
                         <td>{entry.updatedAt ? formatRelativeUpdated(entry.updatedAt, now) : "—"}</td>
                       </tr>
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={9} className="appeals-hold-table-empty">
+                      <td colSpan={canCreateFollowUp ? 10 : 9} className="appeals-hold-table-empty">
                         {normalizedSearchQuery || statusFilter !== "all" ? "No matching rows" : "No rows yet"}
                       </td>
                     </tr>
@@ -765,6 +872,62 @@ export default function AppealsHoldPage() {
                       Create Follow-up Task
                     </button>
                   )}
+                  <div className="appeals-hold-followup-trail">
+                    <h3>Follow-up History</h3>
+                    {followUpTrailError ? <p role="alert">{followUpTrailError}</p> : null}
+                    {selectedFollowUps.length ? (
+                      <ol>
+                        {selectedFollowUps.map((task) => (
+                          <li key={task.id} className={`appeals-hold-followup-trail-item-${task.status}`}>
+                            <Link
+                              to={`/tasks?task=${encodeURIComponent(task.id)}`}
+                              className="appeals-hold-followup-trail-link"
+                              aria-label={`Open ${task.title} on the task board`}
+                              onClick={(event) => {
+                                if (hasUnsavedRowChanges && !window.confirm("Leave without saving your row changes?")) event.preventDefault();
+                              }}
+                            >
+                            <div className="appeals-hold-followup-trail-heading">
+                              <span className="appeals-hold-followup-trail-title">{task.title}</span>
+                              <span className={`appeals-hold-task-status appeals-hold-task-status-${task.status}`}>
+                                {taskStatusTitle(task.status)}
+                              </span>
+                            </div>
+                            <dl className="appeals-hold-followup-trail-dates">
+                              <div>
+                                <dt>Created</dt>
+                                <dd title={formatTrailDateTime(task.createdAt)}>{formatTrailDate(task.createdAt) || "—"}</dd>
+                              </div>
+                              {task.status === "done" ? (
+                                <div className="appeals-hold-followup-trail-date-done">
+                                  <dt>Done</dt>
+                                  {task.completedAt ? (
+                                    <dd title={formatTrailDateTime(task.completedAt)}>{formatTrailDate(task.completedAt)}</dd>
+                                  ) : (
+                                    <dd title="This task was completed before completion dates were recorded; its last update is shown.">
+                                      by {task.updatedAt ? formatTrailDate(task.updatedAt) : "—"}
+                                    </dd>
+                                  )}
+                                </div>
+                              ) : task.dueDate ? (
+                                <div>
+                                  <dt>Due</dt>
+                                  <dd>{formatTrailDueDate(task.dueDate)}</dd>
+                                </div>
+                              ) : null}
+                            </dl>
+                            <div className="appeals-hold-followup-trail-meta">
+                              Assigned to {task.assignedTo || task.assignedToEmail}
+                              {task.createdBy ? ` · created by ${task.createdBy}` : ""}
+                            </div>
+                            </Link>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : followUpTrailError ? null : (
+                      <p className="appeals-hold-followup-trail-empty">No follow-up tasks yet.</p>
+                    )}
+                  </div>
                 </div>
               ) : null}
 

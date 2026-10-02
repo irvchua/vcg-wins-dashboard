@@ -54,6 +54,15 @@ test("server derives ownership and audit fields; cannot forge assigner", () => {
   assert.equal(result.version, 2);
   assert.equal(result.updatedBy, user.name);
 });
+test("server records when a task is completed and clears it when reopened", () => {
+  const later = "2026-09-10T00:00:00Z";
+  const done = prepareTask({ ...task, status: "done", completedAt: "forged" }, task, user, false, false, now);
+  assert.equal(done.completedAt, now);
+  assert.equal(prepareTask({ ...done, title: "Edited" }, done, user, false, false, later).completedAt, now);
+  assert.equal(prepareTask({ ...done, status: "todo" }, done, admin, true, false, later).completedAt, "");
+  assert.equal(prepareTask({ ...task, status: "done" }, { ...task, status: "done" }, user, false, false, later).completedAt, "");
+  assert.equal(prepareTask(task, task, user, false, false, now).completedAt, "");
+});
 test("invalid dates and external recipients are rejected", () => {
   assert.throws(() => prepareTask({ ...task, dueDate: "2026-02-30" }, task, admin, true, false, now), expectStatus(400));
   assert.throws(() => prepareTask({ ...task, assignedToEmail: "outside@example.com" }, task, admin, true, false, now), expectStatus(400));
