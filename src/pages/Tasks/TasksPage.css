@@ -116,6 +116,20 @@
   cursor: grab;
 }
 
+.task-card.task-card-highlighted {
+  border-color: #ffe083;
+  box-shadow: 0 0 0 3px rgba(255, 224, 131, 0.45);
+  animation: task-card-highlight 1s ease-in-out 3;
+}
+
+@keyframes task-card-highlight {
+  50% { box-shadow: 0 0 0 6px rgba(255, 224, 131, 0.15); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-card.task-card-highlighted { animation: none; }
+}
+
 .task-card.task-overdue {
   border-color: rgba(255, 112, 112, 0.7);
   background: rgba(151, 40, 50, 0.2);

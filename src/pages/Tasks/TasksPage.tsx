@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import "../../styles/shared.css";
 import "./TasksPage.css";
 import { useAuthUser } from "../../components/authContext";
@@ -131,6 +131,10 @@ function sourceAppealLink(description?: string): string | null {
 
 export default function TasksPage() {
   const authUser = useAuthUser();
+  const [searchParams] = useSearchParams();
+  const linkedTaskId = searchParams.get("task");
+  const [highlightedTaskId, setHighlightedTaskId] = useState<string | null>(null);
+  const handledLinkedTaskId = useRef<string | null>(null);
   const [isTaskAdmin, setIsTaskAdmin] = useState(!isTasksFirebaseConfigured);
   const [isAdminStatusLoading, setIsAdminStatusLoading] = useState(isTasksFirebaseConfigured);
   const [taskBoard, setTaskBoard] = useState<TaskBoardState>(emptyTaskBoard);
@@ -209,12 +213,38 @@ export default function TasksPage() {
   }, [authUser]);
 
   useEffect(() => {
+    if (!highlightedTaskId) return;
+    const frame = window.requestAnimationFrame(() => {
+      document.querySelector(`[data-task-id="${CSS.escape(highlightedTaskId)}"]`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    });
+    const timer = window.setTimeout(() => setHighlightedTaskId(null), 4000);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [highlightedTaskId]);
+
+  useEffect(() => {
     if (!isTasksFirebaseConfigured) return;
     if (!authUser || !canUserEdit(authUser) || isAdminStatusLoading) return;
 
-    const handleData = (tasks: TaskEntry[]) => {
+    const handleData = (tasks: TaskEntry[], fromCache: boolean) => {
       setTaskBoard(groupTasksByStatus(tasks));
       setIsBoardLoading(false);
+      // Links such as /tasks?task=<id> (from the Appeals on Hold follow-up history)
+      // scroll the board to that card and highlight it once the board has loaded.
+      if (linkedTaskId && handledLinkedTaskId.current !== linkedTaskId) {
+        if (tasks.some((task) => task.id === linkedTaskId)) {
+          handledLinkedTaskId.current = linkedTaskId;
+          setSearchQuery("");
+          setPriorityFilter("all");
+          setHighlightedTaskId(linkedTaskId);
+        } else if (!fromCache) {
+          handledLinkedTaskId.current = linkedTaskId;
+          setSyncMessage("The linked task was not found. It may have been deleted or assigned to someone else.");
+        }
+      }
     };
     const handleError = (error: Error) => {
       console.error("Task sync failed:", error);
@@ -227,7 +257,7 @@ export default function TasksPage() {
       : subscribeToTasks({ isAdmin: false, email: authUser.email }, handleData, handleError);
 
     return () => unsubscribe?.();
-  }, [authUser, isAdminStatusLoading, isTaskAdmin]);
+  }, [authUser, isAdminStatusLoading, isTaskAdmin, linkedTaskId]);
 
   useEffect(() => {
     if (!isTasksFirebaseConfigured || !isTaskAdmin) return;
@@ -633,8 +663,9 @@ export default function TasksPage() {
                     {filteredTaskBoard[status.key].length ? (
                       filteredTaskBoard[status.key].map((task, taskIndex) => (
                         <div
-                          className={`task-card ${isOverdue(task) ? "task-overdue" : ""}`}
+                          className={`task-card ${isOverdue(task) ? "task-overdue" : ""} ${task.id === highlightedTaskId ? "task-card-highlighted" : ""}`}
                           key={task.id}
+                          data-task-id={task.id}
                           draggable
                           onDragStart={(event) => {
                             event.dataTransfer.setData("taskId", task.id);

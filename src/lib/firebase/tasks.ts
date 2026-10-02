@@ -151,7 +151,7 @@ export async function revokeTaskAdmin(email: string) {
 
 export function subscribeToTasks(
   scope: TaskSubscriptionScope,
-  onData: (tasks: TaskEntry[]) => void,
+  onData: (tasks: TaskEntry[], fromCache: boolean) => void,
   onError: (error: Error) => void
 ) {
   const tasksRef = getTasksCollectionRef();
@@ -159,11 +159,11 @@ export function subscribeToTasks(
 
   const tasksQuery = scope.isAdmin ? tasksRef : query(tasksRef, where("assignedToEmail", "==", normalizeEmail(scope.email)));
 
-  return onSnapshot(tasksQuery, (snapshot) => {
+  return onSnapshot(tasksQuery, { includeMetadataChanges: true }, (snapshot) => {
     const tasks = snapshot.docs
       .map((taskDoc) => taskDoc.data() as TaskEntry)
       .sort((a, b) => (a.position ?? Number.MAX_SAFE_INTEGER) - (b.position ?? Number.MAX_SAFE_INTEGER));
-    onData(tasks);
+    onData(tasks, snapshot.metadata.fromCache);
   }, onError);
 }
 
