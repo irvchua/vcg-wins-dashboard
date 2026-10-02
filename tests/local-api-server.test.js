@@ -20,7 +20,7 @@ test("an interrupted request is handled without writing to the disconnected clie
     url: "/api/tasks",
     aborted: false,
     async *[Symbol.asyncIterator]() {
-      yield "partial body";
+      yield Buffer.from("partial body");
       this.aborted = true;
       throw Object.assign(new Error("aborted"), { code: "ECONNRESET" });
     },
@@ -34,7 +34,7 @@ test("an interrupted request is handled without writing to the disconnected clie
   const next = response();
   await handleLocalApiRequest({
     url: "/api/tasks", method: "POST", headers: {},
-    async *[Symbol.asyncIterator]() { yield "{}"; },
+    async *[Symbol.asyncIterator]() { yield Buffer.from("{}"); },
   }, next);
   assert.equal(next.statusCode, 401);
 });
