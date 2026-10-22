@@ -7,11 +7,16 @@ import { useAuthUser } from "../../components/authContext";
 import { signOutUser } from "../../lib/firebase/auth";
 import {
   createAppealRecord,
+  deleteAppealImages,
   deleteAppealRecord,
   isAppealsHoldFirebaseConfigured,
+  loadAppealImageUrl,
+  maxAppealImageSourceBytes,
   RecordConflictError,
   saveAppealRecord,
   subscribeToAppealRecords,
+  uploadAppealImage,
+  AppealImageReadError,
 } from "../../lib/firebase/appealsHold";
 import {
   createTask,
@@ -28,9 +33,11 @@ import {
   followUpRequestKey,
   pendingFollowUpRequests,
 } from "../../lib/firebase/taskRequests";
-import type { AppealHoldEntry, HoldStatus, TaskEntry, TaskStatus } from "../../types";
+import type { AppealHoldEntry, AppealImage, AppealLink, HoldStatus, TaskEntry, TaskStatus } from "../../types";
 
-type AppealDraft = Omit<AppealHoldEntry, "id" | "position" | "updatedAt" | "updatedBy" | "version">;
+type AppealDraft = Omit<AppealHoldEntry, "id" | "position" | "updatedAt" | "updatedBy" | "version" | "decisionLetterLinkOrDate">;
+
+type DraftChange = (draft: AppealDraft) => Partial<AppealDraft>;
 
 type SortKey = "manual" | "vetName" | "holdStatus" | "instructionDate" | "updated";
 
@@ -49,17 +56,27 @@ const defaultDraft: AppealDraft = {
   holdStatus: "",
   reasonOnHold: "",
   instructionDate: "",
-  decisionLetterLinkOrDate: "",
+  instructionLetterUrl: "",
+  decisionLetterDate: "",
+  decisionLetterUrl: "",
+  links: [],
+  images: [],
   notes: "",
   actionNeeded: "",
   notesOnHoldStatus: "",
 };
 
+const draftFields = Object.keys(defaultDraft) as Array<keyof AppealDraft>;
+
+function draftDiffers(draft: AppealDraft, initial: AppealDraft): boolean {
+  return draftFields.some((field) => JSON.stringify(draft[field] ?? "") !== JSON.stringify(initial[field] ?? ""));
+}
+
 function createRecordId(): number {
   return Date.now() * 1000 + Math.floor(Math.random() * 1000);
 }
 
-function createFollowUpTaskId(): string {
+function createUniqueId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -120,6 +137,47 @@ function formatTrailDueDate(dueDate: string): string {
   return new Date(year, month - 1, day).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+// Only http(s) links are kept so a stored value can never become a javascript: href.
+// Bare domains ("drive.google.com/…") are treated as https.
+function toSafeUrl(value: string): string | null {
+  const candidate = /^[a-z][a-z\d+.-]*:/i.test(value) ? value : `https://${value}`;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+// Validates the two letter links and the custom links together before a save.
+function normalizeDraftLinks(draft: AppealDraft): { patch: Pick<AppealDraft, "instructionLetterUrl" | "decisionLetterUrl" | "links">; error: string } {
+  const letterUrls = { instructionLetterUrl: "", decisionLetterUrl: "" };
+  const letters = [["instructionLetterUrl", "Instruction Letter"], ["decisionLetterUrl", "Decision Letter"]] as const;
+  for (const [field, name] of letters) {
+    const rawUrl = draft[field].trim();
+    if (!rawUrl) continue;
+    const url = toSafeUrl(rawUrl);
+    if (!url) return { patch: { ...letterUrls, links: draft.links }, error: `The ${name} link "${rawUrl}" is not a valid web link.` };
+    letterUrls[field] = url;
+  }
+  const { links, error } = normalizeLinks(draft.links);
+  return { patch: { ...letterUrls, links }, error };
+}
+
+function normalizeLinks(links: AppealLink[]): { links: AppealLink[]; error: string } {
+  const normalized: AppealLink[] = [];
+  for (const link of links) {
+    const label = link.label.trim();
+    const rawUrl = link.url.trim();
+    if (!label && !rawUrl) continue;
+    if (!rawUrl) return { links, error: `Add a URL for "${label}" or remove that link.` };
+    const url = toSafeUrl(rawUrl);
+    if (!url) return { links, error: `"${rawUrl}" is not a valid web link.` };
+    normalized.push({ id: link.id, label: label || new URL(url).hostname, url });
+  }
+  return { links: normalized, error: "" };
+}
+
 function getHoldStatusBadgeClass(status: HoldStatus): string {
   switch (status) {
     case "REINSTATED":
@@ -148,6 +206,49 @@ function formatRelativeUpdated(timestamp: string, now: Date): string {
   return `${Math.floor(elapsedHours / 24)}d ago`;
 }
 
+function AppealImageThumbnail({ image, onOpen }: { image: AppealImage; onOpen: (url: string) => void }) {
+  const [url, setUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    loadAppealImageUrl(image)
+      .then((nextUrl) => { if (active) setUrl(nextUrl); })
+      .catch((error) => {
+        console.error("Appeal image load failed:", error);
+        if (active) setFailed(true);
+      });
+    return () => { active = false; };
+  }, [image]);
+
+  if (!url) {
+    return <span className="appeals-hold-image-placeholder">{failed ? "Unavailable" : "Loading…"}</span>;
+  }
+  return (
+    <button type="button" className="appeals-hold-image-open" title={image.name} aria-label={`View ${image.name}`} onClick={() => onOpen(url)}>
+      <img src={url} alt="" />
+    </button>
+  );
+}
+
+function AppealImagePreview({ url, name, onClose }: { url: string; name: string; onClose: () => void }) {
+  return (
+    <div
+      className="appeals-hold-image-preview"
+      role="dialog"
+      aria-modal="true"
+      aria-label={name}
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onKeyDown={(event) => { if (event.key === "Escape") onClose(); }}
+    >
+      <button type="button" className="appeals-hold-image-preview-close" aria-label="Close image" autoFocus onClick={onClose}>
+        ×
+      </button>
+      <img src={url} alt={name} />
+    </div>
+  );
+}
+
 export default function AppealsHoldPage() {
   const authUser = useAuthUser();
   const [searchParams] = useSearchParams();
@@ -166,6 +267,16 @@ export default function AppealsHoldPage() {
   const [addDraft, setAddDraft] = useState<AppealDraft>(defaultDraft);
   const [addError, setAddError] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [addRecordId, setAddRecordId] = useState(createRecordId);
+  const [uploadingCount, setUploadingCount] = useState(0);
+  const [imageError, setImageError] = useState("");
+  // Images uploaded in the open modal that are not saved on the row yet. They are deleted
+  // from storage if the modal is dismissed without saving.
+  const sessionUploadsRef = useRef<AppealImage[]>([]);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  // Saved links render as hyperlinks; these are the ones switched back to text inputs.
+  const [editingLinkKeys, setEditingLinkKeys] = useState<Set<string>>(() => new Set());
+  const [previewImage, setPreviewImage] = useState<{ url: string; name: string } | null>(null);
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<AppealHoldEntry | null>(null);
@@ -276,9 +387,8 @@ export default function AppealsHoldPage() {
 
   const selectedFollowUps = selectedId !== null ? followUpsByRecordId.get(String(selectedId)) ?? [] : [];
 
-  const hasUnsavedRowChanges = Boolean(editDraft && editInitial &&
-    (Object.keys(defaultDraft) as Array<keyof AppealDraft>)
-      .some((field) => (editDraft[field] ?? "") !== (editInitial[field] ?? "")));
+  const hasUnsavedRowChanges = Boolean(editDraft && editInitial && draftDiffers(editDraft, editInitial));
+  const isUploading = uploadingCount > 0;
 
   useEffect(() => {
     if (!isAppealsHoldFirebaseConfigured) return;
@@ -326,7 +436,11 @@ export default function AppealsHoldPage() {
         entry.holdStatus,
         entry.reasonOnHold,
         entry.instructionDate,
-        entry.decisionLetterLinkOrDate,
+        entry.instructionLetterUrl,
+        entry.decisionLetterDate,
+        entry.decisionLetterUrl,
+        ...entry.links.flatMap((link) => [link.label, link.url]),
+        ...entry.images.map((image) => image.name),
         entry.notes,
         entry.actionNeeded,
         entry.notesOnHoldStatus,
@@ -359,26 +473,83 @@ export default function AppealsHoldPage() {
     });
   }
 
+  function discardSessionUploads() {
+    const pending = sessionUploadsRef.current;
+    sessionUploadsRef.current = [];
+    if (pending.length) void deleteAppealImages(pending);
+  }
+
+  async function handleImageFiles(recordId: number, files: File[], applyChange: (change: DraftChange) => void) {
+    if (!files.length) return;
+    const rejected = files.filter((file) => !file.type.startsWith("image/") || file.size > maxAppealImageSourceBytes);
+    const accepted = files.filter((file) => !rejected.includes(file));
+    setImageError(rejected.length
+      ? `Skipped ${rejected.map((file) => file.name).join(", ")}: only images up to 25 MB can be attached.`
+      : "");
+    if (!accepted.length) return;
+
+    setUploadingCount((count) => count + accepted.length);
+    await Promise.all(accepted.map(async (file) => {
+      try {
+        const image = await uploadAppealImage(recordId, file, updaterName);
+        if (!isPageMounted.current) {
+          void deleteAppealImages([image]);
+          return;
+        }
+        sessionUploadsRef.current = [...sessionUploadsRef.current, image];
+        applyChange((draft) => ({ images: [...draft.images, image] }));
+      } catch (error) {
+        console.error("Appeal image upload failed:", error);
+        const message = error instanceof AppealImageReadError ? error.message : `${file.name} could not be uploaded.`;
+        setImageError((current) => [current, message].filter(Boolean).join(" "));
+      } finally {
+        if (isPageMounted.current) setUploadingCount((count) => count - 1);
+      }
+    }));
+  }
+
+  function removeDraftImage(image: AppealImage, applyChange: (change: DraftChange) => void) {
+    // Unsaved uploads can go right away; saved images are deleted once the row is saved.
+    if (sessionUploadsRef.current.some((upload) => upload.id === image.id)) {
+      sessionUploadsRef.current = sessionUploadsRef.current.filter((upload) => upload.id !== image.id);
+      void deleteAppealImages([image]);
+    }
+    applyChange((draft) => ({ images: draft.images.filter((item) => item.id !== image.id) }));
+  }
+
   function openAddRecord() {
     setAddDraft(defaultDraft);
+    setAddRecordId(createRecordId());
     setAddError("");
+    setImageError("");
+    setEditingLinkKeys(new Set());
     setIsAddOpen(true);
   }
 
   function closeAddRecord() {
+    if (isUploading) return;
+    discardSessionUploads();
     setIsAddOpen(false);
     setAddDraft(defaultDraft);
     setAddError("");
+    setImageError("");
   }
 
   async function submitAddRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const vetName = addDraft.vetName.trim();
-    if (!vetName || isSaving || isCreatingFollowUp) return;
+    if (!vetName || isSaving || isCreatingFollowUp || isUploading) return;
+
+    const { patch: linkFields, error: linkError } = normalizeDraftLinks(addDraft);
+    if (linkError) {
+      setAddError(linkError);
+      return;
+    }
 
     const newEntry: AppealHoldEntry = {
       ...addDraft,
-      id: createRecordId(),
+      ...linkFields,
+      id: addRecordId,
       vetName,
       position: entries.length,
     };
@@ -387,6 +558,7 @@ export default function AppealsHoldPage() {
     setAddError("");
     try {
       const saved = await createAppealRecord(newEntry, updaterName);
+      sessionUploadsRef.current = [];
       setEntries((current) => [...current, saved]);
       closeAddRecord();
     } catch (error) {
@@ -396,12 +568,19 @@ export default function AppealsHoldPage() {
     }
   }
 
-  function openEditRecord(entry: AppealHoldEntry) {
+  function openEditRecord(entry: AppealHoldEntry, keepSessionUploads = false) {
+    // "Reload latest" keeps images uploaded in this session so they aren't lost or orphaned.
+    const carriedUploads = keepSessionUploads
+      ? sessionUploadsRef.current.filter((upload) => !entry.images.some((image) => image.id === upload.id))
+      : [];
+    if (!keepSessionUploads) discardSessionUploads();
     setIsFollowUpLocked(pendingFollowUpRequests.has(followUpRequestKey(tasksBoardId, authUser?.id, entry.id)));
     setSelectedId(entry.id);
     setEditInitial({ ...entry });
-    setEditDraft({ ...entry });
+    setEditDraft({ ...entry, images: [...entry.images, ...carriedUploads] });
+    setEditingLinkKeys(new Set());
     setEditConflict("");
+    setImageError("");
     setIsConfirmingDelete(false);
     setIsFollowUpOpen(false);
     setFollowUpAssigneeEmail("");
@@ -411,11 +590,13 @@ export default function AppealsHoldPage() {
   }
 
   function dismissEditRecord() {
-    if (isCreatingFollowUp) return;
+    if (isCreatingFollowUp || isUploading) return;
+    discardSessionUploads();
     setSelectedId(null);
     setEditInitial(null);
     setEditDraft(null);
     setEditConflict("");
+    setImageError("");
     setIsConfirmingDelete(false);
     setIsFollowUpOpen(false);
     setFollowUpAssigneeEmail("");
@@ -457,7 +638,7 @@ export default function AppealsHoldPage() {
 
     const entry = editInitial;
     const newTask: TaskEntry = pending?.task ?? {
-      id: createFollowUpTaskId(),
+      id: createUniqueId(),
       title: followUpTitle.trim(),
       description: `${window.location.origin}/appeals-hold?record=${entry.id}\n${followUpNotes.trim()}`.trimEnd(),
       assignedTo: member!.name || member!.email,
@@ -473,7 +654,7 @@ export default function AppealsHoldPage() {
       version: 1,
     };
 
-    const requestId = pending?.requestId ?? createFollowUpTaskId();
+    const requestId = pending?.requestId ?? createUniqueId();
     pendingFollowUpRequests.set(requestKey, { task: newTask, requestId });
     setIsFollowUpLocked(true);
     setIsCreatingFollowUp(true);
@@ -496,7 +677,7 @@ export default function AppealsHoldPage() {
 
   async function submitEditRecord(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedId || !editInitial || !editDraft || isSaving || isCreatingFollowUp) return;
+    if (!selectedId || !editInitial || !editDraft || isSaving || isCreatingFollowUp || isUploading) return;
 
     const vetName = editDraft.vetName.trim();
     if (!vetName) {
@@ -504,9 +685,14 @@ export default function AppealsHoldPage() {
       return;
     }
 
-    const hasChanges = (Object.keys(defaultDraft) as Array<keyof AppealDraft>)
-      .some((field) => (editDraft[field] ?? "") !== (editInitial[field] ?? ""));
-    if (!hasChanges) {
+    const { patch: linkFields, error: linkError } = normalizeDraftLinks(editDraft);
+    if (linkError) {
+      setEditConflict(linkError);
+      return;
+    }
+
+    const nextEntry: AppealHoldEntry = { ...editDraft, ...linkFields, vetName };
+    if (!draftDiffers(nextEntry, editInitial)) {
       dismissEditRecord();
       return;
     }
@@ -514,7 +700,10 @@ export default function AppealsHoldPage() {
     setIsSaving(true);
     setEditConflict("");
     try {
-      const saved = await saveAppealRecord({ ...editDraft, vetName }, editInitial.version ?? 1, updaterName);
+      const saved = await saveAppealRecord(nextEntry, editInitial.version ?? 1, updaterName);
+      const removedImages = editInitial.images.filter((image) => !saved.images.some((item) => item.id === image.id));
+      void deleteAppealImages(removedImages);
+      sessionUploadsRef.current = [];
       setEntries((current) => current.map((entry) => (entry.id === saved.id ? saved : entry)));
       dismissEditRecord();
     } catch (error) {
@@ -530,11 +719,13 @@ export default function AppealsHoldPage() {
   }
 
   async function handleDeleteRecord() {
-    if (!selectedId || !editInitial || isSaving || isCreatingFollowUp) return;
+    if (!selectedId || !editInitial || isSaving || isCreatingFollowUp || isUploading) return;
 
     setIsSaving(true);
     try {
       await deleteAppealRecord(selectedId, editInitial.version ?? 1);
+      void deleteAppealImages([...editInitial.images, ...sessionUploadsRef.current]);
+      sessionUploadsRef.current = [];
       setEntries((current) => current.filter((entry) => entry.id !== selectedId));
       dismissEditRecord();
     } catch (error) {
@@ -567,6 +758,191 @@ export default function AppealsHoldPage() {
     } finally {
       setSavingStatusId(null);
     }
+  }
+
+  function startEditingLink(key: string) {
+    setEditingLinkKeys((current) => new Set(current).add(key));
+  }
+
+  // A link shows as a hyperlink only while it still matches what is saved on the row, so
+  // anything new or being typed stays an input.
+  function savedHref(url: string, savedUrl: string | undefined, key: string): string | null {
+    if (!savedUrl || url !== savedUrl || editingLinkKeys.has(key)) return null;
+    return toSafeUrl(url);
+  }
+
+  function renderLetterFields(draft: AppealDraft, saved: AppealDraft | null, applyChange: (change: DraftChange) => void) {
+    const letters = [
+      { name: "Instruction Letter", dateField: "instructionDate", urlField: "instructionLetterUrl" },
+      { name: "Decision Letter", dateField: "decisionLetterDate", urlField: "decisionLetterUrl" },
+    ] as const;
+
+    return letters.map(({ name, dateField, urlField }) => {
+      const href = savedHref(draft[urlField], saved?.[urlField], urlField);
+      return (
+        <div className="task-modal-row" key={name}>
+          <label className="modal-field">
+            {name} Date
+            <input
+              value={draft[dateField]}
+              onChange={(event) => {
+                const value = event.target.value;
+                applyChange(() => ({ [dateField]: value }));
+              }}
+            />
+          </label>
+          {href ? (
+            <div className="modal-field">
+              <span>{name} Link</span>
+              <div className="appeals-hold-saved-link-row">
+                <a className="appeals-hold-saved-link" href={href} target="_blank" rel="noopener noreferrer">
+                  View {name}
+                </a>
+                <button type="button" className="appeals-hold-edit-link-button" onClick={() => startEditingLink(urlField)}>
+                  Edit
+                </button>
+              </div>
+            </div>
+          ) : (
+            <label className="modal-field">
+              {name} Link
+              <input
+                placeholder="https://…"
+                inputMode="url"
+                autoFocus={editingLinkKeys.has(urlField)}
+                value={draft[urlField]}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  applyChange(() => ({ [urlField]: value }));
+                }}
+              />
+            </label>
+          )}
+        </div>
+      );
+    });
+  }
+
+  // The board shows the letter's date as the link to the letter.
+  function renderLetterCell(date: string, url: string) {
+    const href = url ? toSafeUrl(url) : null;
+    if (!href) return date || "—";
+    return (
+      <a className="appeals-hold-letter-link" href={href} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()}>
+        {date || "View letter"}
+      </a>
+    );
+  }
+
+  function renderAttachmentFields(recordId: number, draft: AppealDraft, saved: AppealDraft | null, applyChange: (change: DraftChange) => void) {
+    const updateLink = (id: string, patch: Partial<AppealLink>) =>
+      applyChange((current) => ({ links: current.links.map((link) => (link.id === id ? { ...link, ...patch } : link)) }));
+
+    return (
+      <>
+        <div className="modal-field appeals-hold-attachments" role="group" aria-labelledby={`links-heading-${recordId}`}>
+          <span id={`links-heading-${recordId}`}>Other Links</span>
+          {draft.links.map((link) => {
+            const savedLink = saved?.links.find((item) => item.id === link.id);
+            const href = savedLink?.label === link.label ? savedHref(link.url, savedLink.url, link.id) : null;
+            const removeButton = (
+              <button
+                type="button"
+                className="appeals-hold-remove-button"
+                aria-label={`Remove link ${link.label || link.url}`}
+                onClick={() => applyChange((current) => ({ links: current.links.filter((item) => item.id !== link.id) }))}
+              >
+                ×
+              </button>
+            );
+            return href ? (
+              <div className="appeals-hold-saved-link-row" key={link.id}>
+                <a className="appeals-hold-saved-link" href={href} target="_blank" rel="noopener noreferrer">
+                  {link.label || link.url}
+                </a>
+                <button type="button" className="appeals-hold-edit-link-button" onClick={() => startEditingLink(link.id)}>
+                  Edit
+                </button>
+                {removeButton}
+              </div>
+            ) : (
+            <div className="appeals-hold-link-row" key={link.id}>
+              <input
+                aria-label="Link label"
+                placeholder="Label (e.g. C-File)"
+                autoFocus={editingLinkKeys.has(link.id)}
+                value={link.label}
+                onChange={(event) => updateLink(link.id, { label: event.target.value })}
+              />
+              <input
+                aria-label="Link URL"
+                placeholder="https://…"
+                inputMode="url"
+                value={link.url}
+                onChange={(event) => updateLink(link.id, { url: event.target.value })}
+              />
+              {removeButton}
+            </div>
+            );
+          })}
+          <button
+            type="button"
+            className="secondary-action-button appeals-hold-add-button"
+            onClick={() => {
+              const id = createUniqueId();
+              startEditingLink(id);
+              applyChange((current) => ({ links: [...current.links, { id, label: "", url: "" }] }));
+            }}
+          >
+            + Add link
+          </button>
+        </div>
+
+        <div className="modal-field appeals-hold-attachments" role="group" aria-labelledby={`images-heading-${recordId}`}>
+          <span id={`images-heading-${recordId}`}>Images</span>
+          {draft.images.length ? (
+            <ul className="appeals-hold-image-grid">
+              {draft.images.map((image) => (
+                <li key={image.id}>
+                  <AppealImageThumbnail image={image} onOpen={(url) => setPreviewImage({ url, name: image.name })} />
+                  <button
+                    type="button"
+                    className="appeals-hold-remove-button"
+                    aria-label={`Remove image ${image.name}`}
+                    onClick={() => removeDraftImage(image, applyChange)}
+                    disabled={isSaving}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            hidden
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              void handleImageFiles(recordId, files, applyChange);
+            }}
+          />
+          <button
+            type="button"
+            className="secondary-action-button appeals-hold-add-button"
+            onClick={() => imageInputRef.current?.click()}
+            disabled={isSaving}
+          >
+            + Attach images
+          </button>
+          {isUploading ? <p className="appeals-hold-upload-status">Uploading {uploadingCount} image{uploadingCount === 1 ? "" : "s"}…</p> : null}
+          {imageError ? <p className="tasks-sync-message" role="alert">{imageError}</p> : null}
+        </div>
+      </>
+    );
   }
 
   return (
@@ -629,8 +1005,9 @@ export default function AppealsHoldPage() {
                     <th>Vet Name</th>
                     <th>On Hold Status</th>
                     <th>Reason On Hold</th>
-                    <th>Instruction Date</th>
-                    <th>Decision Letter Link/Date</th>
+                    <th>Instruction Letter</th>
+                    <th>Decision Letter</th>
+                    <th>Other Links</th>
                     <th>Notes</th>
                     <th>Action Needed</th>
                     <th>Notes On Hold Status</th>
@@ -661,8 +1038,22 @@ export default function AppealsHoldPage() {
                           </select>
                         </td>
                         <td>{entry.reasonOnHold || "—"}</td>
-                        <td>{entry.instructionDate || "—"}</td>
-                        <td>{entry.decisionLetterLinkOrDate || "—"}</td>
+                        <td>{renderLetterCell(entry.instructionDate, entry.instructionLetterUrl)}</td>
+                        <td>{renderLetterCell(entry.decisionLetterDate, entry.decisionLetterUrl)}</td>
+                        <td>
+                          {entry.links.length ? (
+                            <div className="appeals-hold-link-list">
+                              {entry.links.map((link) => {
+                                const href = toSafeUrl(link.url);
+                                return href ? (
+                                  <a key={link.id} href={href} target="_blank" rel="noopener noreferrer" onClick={(event) => event.stopPropagation()}>
+                                    {link.label || link.url}
+                                  </a>
+                                ) : null;
+                              })}
+                            </div>
+                          ) : "—"}
+                        </td>
                         <td>{entry.notes || "—"}</td>
                         <td>{entry.actionNeeded || "—"}</td>
                         <td>{entry.notesOnHoldStatus || "—"}</td>
@@ -691,7 +1082,7 @@ export default function AppealsHoldPage() {
                     ))
                   ) : (
                     <tr>
-                      <td colSpan={canCreateFollowUp ? 10 : 9} className="appeals-hold-table-empty">
+                      <td colSpan={canCreateFollowUp ? 11 : 10} className="appeals-hold-table-empty">
                         {normalizedSearchQuery || statusFilter !== "all" ? "No matching rows" : "No rows yet"}
                       </td>
                     </tr>
@@ -730,22 +1121,8 @@ export default function AppealsHoldPage() {
                   </select>
                 </label>
               </div>
-              <div className="task-modal-row">
-                <label className="modal-field">
-                  Instruction Date
-                  <input
-                    value={addDraft.instructionDate}
-                    onChange={(event) => setAddDraft((draft) => ({ ...draft, instructionDate: event.target.value }))}
-                  />
-                </label>
-                <label className="modal-field">
-                  Decision Letter Link/Date
-                  <input
-                    value={addDraft.decisionLetterLinkOrDate}
-                    onChange={(event) => setAddDraft((draft) => ({ ...draft, decisionLetterLinkOrDate: event.target.value }))}
-                  />
-                </label>
-              </div>
+              {renderLetterFields(addDraft, null, (change) => setAddDraft((draft) => ({ ...draft, ...change(draft) })))}
+              {renderAttachmentFields(addRecordId, addDraft, null, (change) => setAddDraft((draft) => ({ ...draft, ...change(draft) })))}
               <label className="modal-field">
                 Reason On Hold
                 <textarea
@@ -778,8 +1155,8 @@ export default function AppealsHoldPage() {
               <div className="appeals-hold-modal-footer">
               {addError ? <p className="tasks-sync-message" role="alert">{addError}</p> : null}
               <div className="record-modal-actions">
-                <button type="button" className="secondary-action-button" onClick={closeAddRecord} disabled={isSaving || isCreatingFollowUp}>Cancel</button>
-                <button type="submit" className="primary-action-button" disabled={isSaving || isCreatingFollowUp}>{isSaving ? "Saving…" : "Add Row"}</button>
+                <button type="button" className="secondary-action-button" onClick={closeAddRecord} disabled={isSaving || isCreatingFollowUp || isUploading}>Cancel</button>
+                <button type="submit" className="primary-action-button" disabled={isSaving || isCreatingFollowUp || isUploading}>{isSaving ? "Saving…" : "Add Row"}</button>
               </div>
               </div>
             </form>
@@ -814,22 +1191,8 @@ export default function AppealsHoldPage() {
                   </select>
                 </label>
               </div>
-              <div className="task-modal-row">
-                <label className="modal-field">
-                  Instruction Date
-                  <input
-                    value={editDraft.instructionDate}
-                    onChange={(event) => setEditDraft((draft) => draft && { ...draft, instructionDate: event.target.value })}
-                  />
-                </label>
-                <label className="modal-field">
-                  Decision Letter Link/Date
-                  <input
-                    value={editDraft.decisionLetterLinkOrDate}
-                    onChange={(event) => setEditDraft((draft) => draft && { ...draft, decisionLetterLinkOrDate: event.target.value })}
-                  />
-                </label>
-              </div>
+              {renderLetterFields(editDraft, editInitial, (change) => setEditDraft((draft) => draft && { ...draft, ...change(draft) }))}
+              {renderAttachmentFields(editDraft.id, editDraft, editInitial, (change) => setEditDraft((draft) => draft && { ...draft, ...change(draft) }))}
               <label className="modal-field">
                 Reason On Hold
                 <textarea
@@ -946,12 +1309,12 @@ export default function AppealsHoldPage() {
                   </>
                 ) : (
                   <>
-                    <button type="button" className="task-delete-action" onClick={() => setIsConfirmingDelete(true)} disabled={isSaving || isCreatingFollowUp}>
+                    <button type="button" className="task-delete-action" onClick={() => setIsConfirmingDelete(true)} disabled={isSaving || isCreatingFollowUp || isUploading}>
                       Delete
                     </button>
                     <span className="task-actions-spacer" />
-                    <button type="button" className="secondary-action-button" onClick={dismissEditRecord} disabled={isSaving || isCreatingFollowUp}>Cancel</button>
-                    <button type="submit" className="primary-action-button" disabled={isSaving || isCreatingFollowUp}>
+                    <button type="button" className="secondary-action-button" onClick={dismissEditRecord} disabled={isSaving || isCreatingFollowUp || isUploading}>Cancel</button>
+                    <button type="submit" className="primary-action-button" disabled={isSaving || isCreatingFollowUp || isUploading}>
                       {isSaving ? "Saving…" : "Save changes"}
                     </button>
                   </>
@@ -964,7 +1327,7 @@ export default function AppealsHoldPage() {
                     type="button"
                     onClick={() => {
                       const latest = entries.find((entry) => entry.id === selectedId);
-                      if (latest) openEditRecord(latest);
+                      if (latest) openEditRecord(latest, true);
                     }}
                   >
                     Reload latest
@@ -1036,6 +1399,9 @@ export default function AppealsHoldPage() {
             </form>
           </div>
         </div>
+      ) : null}
+      {previewImage ? (
+        <AppealImagePreview url={previewImage.url} name={previewImage.name} onClose={() => setPreviewImage(null)} />
       ) : null}
     </main>
   );

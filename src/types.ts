@@ -64,13 +64,37 @@ export type HoldStatus =
   | "WAITING/REEVALUATION"
   | "NOT INTERESTED";
 
+export type AppealLink = {
+  id: string;
+  label: string;
+  url: string;
+};
+
+// Metadata only; the compressed image data lives in its own document at
+// appealsHoldBoards/{boardId}/records/{recordId}/images/{id}.
+export type AppealImage = {
+  id: string;
+  recordId: number;
+  name: string;
+  contentType: string;
+  size: number;
+  uploadedAt: string;
+  uploadedBy: string;
+};
+
 export type AppealHoldEntry = {
   id: number;
   vetName: string;
   holdStatus: HoldStatus;
   reasonOnHold: string;
   instructionDate: string;
-  decisionLetterLinkOrDate: string;
+  instructionLetterUrl: string;
+  decisionLetterDate: string;
+  decisionLetterUrl: string;
+  links: AppealLink[];
+  images: AppealImage[];
+  /** Legacy combined field; migrated into decisionLetterDate/links on read. */
+  decisionLetterLinkOrDate?: string;
   notes: string;
   actionNeeded: string;
   notesOnHoldStatus: string;

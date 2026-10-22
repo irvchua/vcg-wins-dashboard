@@ -301,6 +301,202 @@
   outline-offset: 3px;
 }
 
+.appeals-hold-attachments {
+  gap: 10px;
+}
+
+.appeals-hold-link-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.appeals-hold-saved-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.appeals-hold-saved-link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: #8cc8ff;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.appeals-hold-saved-link:hover {
+  color: #b9ddff;
+}
+
+.appeals-hold-edit-link-button {
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.appeals-hold-edit-link-button:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.appeals-hold-add-button {
+  justify-self: start;
+  padding: 9px 12px;
+  font-size: 13px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.appeals-hold-remove-button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: white;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.appeals-hold-remove-button:hover {
+  background: rgba(217, 54, 54, 0.5);
+}
+
+.appeals-hold-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.appeals-hold-image-grid li {
+  position: relative;
+}
+
+.appeals-hold-image-placeholder {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 11px;
+  text-transform: none;
+}
+
+.appeals-hold-image-grid .appeals-hold-image-open {
+  display: block;
+  width: 100%;
+  padding: 0;
+  cursor: zoom-in;
+  overflow: hidden;
+  aspect-ratio: 1;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.appeals-hold-image-grid img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.appeals-hold-image-grid .appeals-hold-remove-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  background: rgba(9, 15, 29, 0.8);
+  font-size: 16px;
+}
+
+.appeals-hold-image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 56px 16px 16px;
+  background: rgba(0, 0, 0, 0.85);
+}
+
+.appeals-hold-image-preview img {
+  max-width: 100%;
+  max-height: calc(100vh - 72px);
+  max-height: calc(100dvh - 72px);
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.appeals-hold-image-preview-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 999px;
+  background: rgba(9, 15, 29, 0.85);
+  color: white;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.appeals-hold-image-preview-close:hover {
+  background: rgba(217, 54, 54, 0.8);
+}
+
+.appeals-hold-image-preview-close:focus-visible {
+  outline: 2px solid #f8d26a;
+  outline-offset: 2px;
+}
+
+.appeals-hold-upload-status {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.appeals-hold-link-list {
+  display: grid;
+  gap: 4px;
+}
+
+.appeals-hold-letter-link,
+.appeals-hold-link-list a {
+  color: #8cc8ff;
+  overflow-wrap: anywhere;
+}
+
 .appeals-hold-modal-footer {
   display: grid;
   gap: 12px;
@@ -334,6 +530,14 @@
 @media (max-width: 600px) {
   .appeals-hold-shell .task-modal-row {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .appeals-hold-link-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .appeals-hold-link-row input:nth-child(2) {
+    grid-column: 1;
   }
 
   .appeals-hold-modal-footer .record-modal-actions {
