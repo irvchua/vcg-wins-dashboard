@@ -50,6 +50,15 @@ service cloud.firestore {
       match /records/{recordId} {
         allow read: if approvedEditor();
         allow write: if approvedEditor();
+
+        // Compressed images attached to a row (see uploadAppealImage). Write-once:
+        // replacing an image creates a new document and deletes the old one.
+        match /images/{imageId} {
+          allow read, delete: if approvedEditor();
+          allow create: if approvedEditor()
+            && request.resource.data.dataUrl is string
+            && request.resource.data.dataUrl.size() <= 1000000;
+        }
       }
     }
 

@@ -20,6 +20,7 @@
 // Service Accounts -> Generate new private key. That file grants full admin access to your
 // Firebase project — keep it outside this repo and delete it once you're done running this.
 
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
@@ -118,10 +119,25 @@ function main() {
           const normalized = normalizeHoldStatus(raw);
           if (raw && !normalized) warnings.push(`Row ${index + 1} (${cells[0]}): unrecognized status "${raw}" — left blank, fix manually after import.`);
           entry.holdStatus = normalized;
+        } else if (column === "instructionDate" || column === "decisionLetterLinkOrDate") {
+          // Split like splitLetterField in src/lib/firebase/appealsHold.ts: the first URL
+          // is the letter link, further URLs become extra links, the rest is the date.
+          const [dateField, urlField, letterName] = column === "instructionDate"
+            ? ["instructionDate", "instructionLetterUrl", "Instruction Letter"]
+            : ["decisionLetterDate", "decisionLetterUrl", "Decision Letter"];
+          const urls = raw.match(/https?:\/\/\S+/gi) ?? [];
+          entry[dateField] = urls.reduce((rest, url) => rest.replace(url, " "), raw).replace(/\s+/g, " ").trim();
+          entry[urlField] = urls[0] ?? "";
+          entry.links = [
+            ...(entry.links ?? []),
+            ...urls.slice(1).map((url, urlIndex) => ({ id: randomUUID(), label: `${letterName} ${urlIndex + 2}`, url })),
+          ];
         } else {
           entry[column] = raw;
         }
       });
+      entry.links ??= [];
+      entry.images = [];
       return entry;
     })
     .filter((entry) => entry.vetName);
